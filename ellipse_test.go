@@ -33,10 +33,9 @@ func TestCFFDRSLengthToBreadth(t *testing.T) {
 // The backing rate, via the ratio form the serving path actually uses.
 //
 // BROS is not a new spread equation — it is ROS at the BACKING ISI. Asserting it
-// through BackISIRatio rather than BackISI is deliberate: the ratio is what
-// internal/surface calls, because it is anchored on SMHI's published ISI and
-// never forms an ISI from FFMC. Testing the form nothing calls would leave the
-// served number unoracled.
+// through BackISIRatio rather than a backing ISI is deliberate: the ratio is what
+// a caller anchored on a published ISI calls, having never formed an ISI from
+// FFMC. Testing a form nothing calls would leave the real number unoracled.
 //
 // Restricted to flat rows for the same reason TestCFFDRSSurfaceROS is: on sloped
 // ground cffdrs' reported ISI already carries the slope-equivalent wind, and the

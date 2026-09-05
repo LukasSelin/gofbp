@@ -12,20 +12,19 @@ import (
 	"testing"
 )
 
-// The cffdrs fixture is the only oracle in this repo that can say the ST-X-3
-// coefficients in this package are actually right — and, since the Python mirror
-// and its parity test were removed, the only cross-implementation check the
+// The cffdrs fixture is the only oracle that can say the ST-X-3 coefficients in
+// this package are actually right, and the only cross-implementation check the
 // package has at all. cffdrs is maintained by the Canadian Forest Service authors
 // of the FBP System, so it is the reference implementation rather than a second
 // opinion.
 //
 // Regenerate with:
 //
-//	backend/internal/fbp/testdata/regen-cffdrs.sh
+//	testdata/regen-cffdrs.sh
 //
 // R is needed only to regenerate, and that script does not need it on the host:
-// it pins R and cffdrs in a container. The fixture is committed and these tests
-// read it directly.
+// it pins R and cffdrs in a container. The fixture is NOT committed — see
+// testdata/README.md — so these tests skip on a fresh clone until you make it.
 type cffdrsCase struct {
 	Fuel string  `json:"fuel"`
 	FFMC float64 `json:"ffmc"`
@@ -63,7 +62,8 @@ func loadCFFDRS(t *testing.T) cffdrsFixture {
 	t.Helper()
 	raw, err := os.ReadFile("testdata/cffdrs.json")
 	if errors.Is(err, fs.ErrNotExist) {
-		t.Skip("testdata/cffdrs.json missing — regenerate with: backend/internal/fbp/testdata/regen-cffdrs.sh")
+		t.Skip("testdata/cffdrs.json is absent; it is generated, not committed — " +
+			"run testdata/regen-cffdrs.sh (needs Docker). See testdata/README.md.")
 	}
 	if err != nil {
 		t.Fatalf("read fixture: %v", err)
@@ -125,8 +125,8 @@ func TestCFFDRSSlopeFactor(t *testing.T) {
 // ISI's own check, and the only thing in this package that can see a wrong
 // fine-fuel-moisture term.
 //
-// Before the back-solve landed nothing here computed ISI — it arrived from SMHI,
-// and every test took it from the fixture — so there was no moisture constant to
+// Before the back-solve landed nothing here computed ISI — it arrived as an
+// input, and every test took it from the fixture — so there was no constant to
 // be wrong. The value a careful reading of eq. 10 produces is 147.2, which most
 // printings round it to; checked against the fixture while the back-solve was
 // being written, that carries a 1.04e-3 relative bias against cffdrs' exact
@@ -244,7 +244,7 @@ func TestCFFDRSSlopeBackSolve(t *testing.T) {
 	}
 
 	// The mixedwood ISF blend is reasoning, not measurement, until these appear.
-	// fuelmap.FuelType emits M1 in production. See gen_cffdrs_reference.R.
+	// M1 is a common real-world mapping. See gen_cffdrs_reference.R.
 	if perFuel["M1"] == 0 && perFuel["M2"] == 0 {
 		t.Log("NOTE: no sloped mixedwood cases — the eq. 42 ISF blend is unoracled")
 	}
@@ -253,11 +253,11 @@ func TestCFFDRSSlopeBackSolve(t *testing.T) {
 // slopeAdjustedROS is the FBP System's full slope path composed end to end:
 // RSI(ISI(FFMC, WSV)) · BE(BUI), plus the azimuth the head fire runs towards.
 //
-// It lives in the test rather than the package because production has no use for
-// it — internal/surface is anchored on SMHI's ISI and composes the pieces itself
-// (see the note where this function would otherwise sit, in slopewind.go). Every
-// part of it is production code and separately asserted; what this adds is the
-// order they go in, and the fact that SF does not appear.
+// It lives in the test rather than the package because the intended caller has no
+// use for it — anchored on a published ISI, it composes the pieces itself (see
+// the note where this function would otherwise sit, in slopewind.go). Every part
+// of it is package code and separately asserted; what this adds is the order they
+// go in, and the fact that SF does not appear.
 func slopeAdjustedROS(s SlopeWind, bui float64) (rosMMin, razDeg float64) {
 	wsv, raz := NetEffectiveWind(s)
 	return RSI(s.Code, ISI(s.FFMC, wsv), s.PC, s.CuringPct) * BuildupEffect(s.Code, bui), raz
@@ -329,8 +329,9 @@ func TestCFFDRSSurfaceROS(t *testing.T) {
 // The pairing matters and is easy to get wrong. cffdrs' reported ISI for a sloped
 // row ALREADY contains the slope-equivalent wind, so feeding it back into
 // ROS(..., slopePct) applies slope twice and the ratio comes out as exactly SF
-// for every fuel — a tidy-looking number that measures nothing. What production
-// actually has is SMHI's ISI, which knows only wind: so each sloped row is paired
+// for every fuel — a tidy-looking number that measures nothing. What a caller
+// actually has is a published ISI, which knows only wind: so each sloped row is
+// paired
 // with the flat row at the same fuel/FFMC/BUI/wind, and that row's ISI is the
 // input. Fails only if the fixture stops containing pairable sloped cases.
 func TestCFFDRSSlopeDivergence(t *testing.T) {
@@ -464,7 +465,7 @@ func TestCFFDRSSlopeDivergence(t *testing.T) {
 
 	// The aligned bucket is what a fallback cell looks like in the good case. If
 	// it ever drifts far above this the fallback has stopped being a reasonable
-	// substitute and internal/surface should stop offering it silently.
+	// substitute and a caller should stop offering it silently.
 	//
 	// The bound is 8 and not the 4 it started at because widening the sweep to
 	// FFMC 95 moved the worst aligned case from 3.84x to 6.54x. That is the RSI

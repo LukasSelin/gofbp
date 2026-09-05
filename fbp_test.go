@@ -8,8 +8,8 @@ import (
 func almostEqual(a, b, tol float64) bool { return math.Abs(a-b) <= tol }
 
 // curingPctForTest is an arbitrary in-range curing value. FBP takes curing as
-// an input; choosing what to assume for Sweden is fuelmap.DefaultCuringPct and
-// deliberately not this package's business.
+// an input; choosing what to assume for a given landscape is the caller's
+// business and deliberately not this package's.
 const curingPctForTest = 80.0
 
 func TestBuildupEffectIsOneAtBUI0(t *testing.T) {
@@ -130,8 +130,8 @@ func TestROSFiniteAcrossOperatingRange(t *testing.T) {
 }
 
 // TestUnknownFuelIsInert guards the API path: a cell whose fuel cannot be
-// determined must yield 0, never NaN, since NaN is the surface's
-// outside-the-parcel sentinel.
+// determined must yield 0, never NaN, since NaN is a caller's usual no-data
+// sentinel.
 func TestUnknownFuelIsInert(t *testing.T) {
 	if got := ROS("nonsense", 10, 60, 100, curingPctForTest, 20); got != 0 {
 		t.Errorf("ROS(unknown fuel) = %v, want 0", got)

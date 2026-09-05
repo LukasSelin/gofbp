@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# Regenerate backend/internal/fbp/testdata/cffdrs.json, the FBP reference fixture
-# that every Go TestCFFDRS* asserts against.
+# Regenerate testdata/cffdrs.json, the FBP reference fixture that every Go
+# TestCFFDRS* asserts against.
 #
-# The fixture is committed and the tests read it with no R involved, so this is
-# not part of anyone's build. Run it when you change a coefficient in
-# internal/fbp, when you widen a sweep in gen_cffdrs_reference.R, or on a cffdrs
-# upgrade -- then read the diff, because a changed reference number is the oracle
-# telling you something, not noise to be committed past.
+# The fixture is NOT committed -- see testdata/README.md -- so those tests skip
+# until you generate it. Generate it once and they read it with no R involved.
+# Re-run this when you change a coefficient in this package, when you widen a
+# sweep in gen_cffdrs_reference.R, or on a cffdrs upgrade -- then read the diff,
+# because a changed reference number is the oracle telling you something, not
+# noise to be committed past.
 #
 # R comes from PATH if it has cffdrs, otherwise from Docker: the Dockerfile beside
 # this script pins R 4.6.1 and cffdrs 1.9.2, so a regeneration needs Docker and
@@ -28,7 +29,7 @@
 #
 # The first Docker run builds the image and takes a while -- an R toolchain plus
 # GDAL. After that it is cached and a regeneration is seconds. The sweep itself is
-# ~8600 cases through cffdrs::fbp() and is not the slow part.
+# ~11500 cases through cffdrs::fbp() and is not the slow part.
 set -euo pipefail
 
 R_VERSION="${CFFDRS_R_VERSION:-4.6.1}"
@@ -47,20 +48,20 @@ while [ $# -gt 0 ]; do
 	--dry-run) DRY_RUN=1 ;;
 	--r-version) R_VERSION="${2:?--r-version needs a value}"; shift ;;
 	--cffdrs-version) CFFDRS_VERSION="${2:?--cffdrs-version needs a value}"; shift ;;
-	-h | --help) sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+	-h | --help) sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
 	*) die "unknown option: $1 (try --help)" ;;
 	esac
 	shift
 done
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# testdata -> fbp -> internal -> backend -> repo root.
-REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
-FIXTURE="$REPO_ROOT/backend/internal/fbp/testdata/cffdrs.json"
-IMAGE="brandtorn-cffdrs:${R_VERSION}-${CFFDRS_VERSION}"
+# testdata -> module root.
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+FIXTURE="$SCRIPT_DIR/cffdrs.json"
+IMAGE="gofbp-cffdrs:${R_VERSION}-${CFFDRS_VERSION}"
 
-[ -f "$REPO_ROOT/backend/internal/fbp/testdata/gen_cffdrs_reference.R" ] ||
-	die "cannot find the generator from $SCRIPT_DIR — is this still in backend/internal/fbp/testdata?"
+[ -f "$SCRIPT_DIR/gen_cffdrs_reference.R" ] ||
+	die "cannot find the generator from $SCRIPT_DIR — is this still in testdata/?"
 
 # Report the fixture's recorded provenance. The whole point of pinning is that a
 # mismatch is visible, so print it rather than making someone grep the JSON.
@@ -87,10 +88,10 @@ local)
 	have_local_r || die "no local Rscript with cffdrs installed (drop --local to use Docker)"
 	echo "Using local Rscript."
 	if [ "$DRY_RUN" = 1 ]; then
-		echo "would run: (cd $REPO_ROOT && Rscript backend/internal/fbp/testdata/gen_cffdrs_reference.R)"
+		echo "would run: (cd $REPO_ROOT && Rscript testdata/gen_cffdrs_reference.R)"
 		exit 0
 	fi
-	(cd "$REPO_ROOT" && Rscript backend/internal/fbp/testdata/gen_cffdrs_reference.R)
+	(cd "$REPO_ROOT" && Rscript testdata/gen_cffdrs_reference.R)
 	;;
 docker)
 	command -v docker >/dev/null 2>&1 || die "docker not found, and no local R with cffdrs"
@@ -121,5 +122,5 @@ echo
 echo "Fixture after:"
 fixture_versions
 echo
-echo "Now read the diff, then:  cd backend && go test ./internal/fbp/ -v -run TestCFFDRS"
-echo "A changed reference number is the oracle disagreeing with internal/fbp."
+echo "Now read the diff, then:  go test . -v -run TestCFFDRS"
+echo "A changed reference number is the oracle disagreeing with this package."

@@ -16,9 +16,10 @@ import "math"
 // thing PUSHES TOWARDS, not the azimuth it comes from:
 //
 //   - WindAzimuthDeg is where the wind is blowing to. A meteorological
-//     "wind from" bearing — which is what SMHI's wd is — is this minus 180.
-//   - UpslopeAzimuthDeg is where the ground rises. A downslope aspect — which is
-//     what internal/surface's aspect_deg layer stores — is this minus 180.
+//     "wind from" bearing — the near-universal convention in weather data — is
+//     this minus 180.
+//   - UpslopeAzimuthDeg is where the ground rises. A downslope aspect — what a
+//     terrain aspect raster normally stores — is this minus 180.
 //
 // Only the DIFFERENCE of the two reaches the net wind speed, so a caller that
 // gets both conventions wrong in the same direction still gets the right speed.
@@ -107,8 +108,8 @@ func EquivalentWind(s SlopeWind) float64 {
 // slope path.
 //
 // The mixedwood branch was for a while the one part of this file with no oracle
-// behind it — the sloped sweep covered C2, C3, D1, S1 and O1b only, while
-// fuelmap.FuelType emits M1 in production. The sweep now includes M1/M2, and
+// behind it — the sloped sweep covered C2, C3, D1, S1 and O1b only, while M1 is
+// a common real-world mapping. The sweep now includes M1/M2, and
 // TestCFFDRSSlopeBackSolve confirms both readings above: cffdrs blends ISF, and
 // it does not carry M2's 0.2 into the slope path.
 //
@@ -171,9 +172,8 @@ func invertRSI(f Fuel, rsf, scale float64) (isf float64, clamped bool) {
 // wind opposing it subtracts, and at zero wind WSV is WSE alone.
 //
 // On flat ground it returns exactly (WindKmh, WindAzimuthDeg) — with nothing to
-// vector-add the back-solve is an identity, bit-for-bit, which is what lets
-// internal/surface short-circuit flat cells and serve numbers identical to the
-// pre-back-solve build.
+// vector-add the back-solve is an identity, bit-for-bit, which lets a caller
+// short-circuit flat cells and get numbers identical to not calling it at all.
 //
 // Eq. 51 is computed with math.Atan2 rather than the published acos-plus-quadrant
 // form. They are the same function; atan2 has no domain edge to clamp and gets
@@ -181,8 +181,8 @@ func invertRSI(f Fuel, rsf, scale float64) (isf float64, clamped bool) {
 //
 // When WSV is 0 — only when there is neither wind nor slope — the azimuth is
 // undefined. cffdrs returns NaN; this returns 0. That is a deliberate deviation:
-// a NaN azimuth escaping into the surface grid would be read as "outside the
-// parcel", and the direction is meaningless either way.
+// a NaN azimuth escaping into a caller's grid would be read as no-data, and the
+// direction is meaningless either way.
 func NetEffectiveWind(s SlopeWind) (wsvKmh, razDeg float64) {
 	if s.SlopePct <= 0 {
 		return s.WindKmh, normalizeDeg(s.WindAzimuthDeg)
@@ -204,12 +204,11 @@ func NetEffectiveWind(s SlopeWind) (wsvKmh, razDeg float64) {
 // slope is NOT multiplied in again because it is already inside WSV — has no
 // function here on purpose.
 //
-// It would have exactly one caller, and that caller is a test. The serving path
-// does not want it: internal/surface.Spread is anchored on SMHI's published
-// ISI rather than deriving ISI from FFMC, so it composes ISI and NetEffectiveWind
-// itself and passes slopePct = 0 to ROS. Exporting a second composition that
-// nothing in production calls would read as an offer, and taking it up is the
-// double-count this whole file exists to remove.
+// It would have exactly one caller, and that caller is a test. A caller anchored
+// on a published ISI rather than deriving ISI from FFMC composes ISI and
+// NetEffectiveWind itself and passes slopePct = 0 to ROS. Exporting a second
+// composition that nothing outside a test calls would read as an offer, and
+// taking it up is the double-count this whole file exists to remove.
 //
 // The composition is asserted against cffdrs all the same — slopeAdjustedROS in
 // cffdrs_test.go, two lines, at the assertion site where it can be read against

@@ -1,28 +1,29 @@
 # Emit the FBP reference fixture from the cffdrs R package.
 #
-#   backend/internal/fbp/testdata/regen-cffdrs.sh
+#   testdata/regen-cffdrs.sh
 #
 # That wrapper pins R and cffdrs in a container, so regenerating needs Docker and
-# nothing else. To drive this file directly instead, run it from the REPO ROOT --
+# nothing else. To drive this file directly instead, run it from the MODULE ROOT --
 # the output path below is relative to it:
 #
-#   Rscript backend/internal/fbp/testdata/gen_cffdrs_reference.R
+#   Rscript testdata/gen_cffdrs_reference.R
 #
-# Writes backend/internal/fbp/testdata/cffdrs.json: a grid of FBP inputs and what
-# the *authoritative* implementation produces for each. Go's TestCFFDRS* assert
-# internal/fbp reproduces them.
+# Writes testdata/cffdrs.json: a grid of FBP inputs and what the *authoritative*
+# implementation produces for each. Go's TestCFFDRS* assert this package
+# reproduces them.
 #
-# Why this exists: every coefficient in internal/fbp was typed in by hand from
+# Why this exists: every coefficient in this package was typed in by hand from
 # ST-X-3, and a transcription error looks exactly like correct code. cffdrs is
 # maintained by the Canadian Forest Service authors of the system itself, so it
-# is the only oracle in this repo that can say the tables are actually right --
-# and since the Python mirror was removed it is the only cross-implementation
-# check the package has at all. One such error was found this way (the grass
-# curing branch, 2026-08-18, 2.2x too fast at full curing).
+# is the only oracle available that can say the tables are actually right, and
+# the only cross-implementation check the package has at all. One such error was
+# found this way (the grass curing branch, 2026-08-18, 2.2x too fast at full
+# curing).
 #
-# R is needed to REGENERATE the fixture, never to run the tests -- the JSON is
-# committed and the Go side reads it with no R involved. Re-run this after
-# touching a coefficient, and on a cffdrs upgrade.
+# R is needed to REGENERATE the fixture, never to run the tests. The JSON is NOT
+# committed: generate it once and the Go side reads it with no R involved, and
+# the TestCFFDRS* tests skip until you do. Re-run this after touching a
+# coefficient, and on a cffdrs upgrade.
 #
 # Requires: R, and install.packages("cffdrs") -- or just Docker, via
 # regen-cffdrs.sh. cffdrs Imports sf and terra, so a local install also needs
@@ -30,14 +31,14 @@
 
 suppressMessages(library(cffdrs))
 
-OUT <- file.path("backend", "internal", "fbp", "testdata", "cffdrs.json")
+OUT <- file.path("testdata", "cffdrs.json")
 
 # --- the sweeps ------------------------------------------------------------
 #
 # ISI is not an fbp() input: it is derived from FFMC and wind. Sweeping both is
 # how this reaches a wide ISI range, and on FLAT ground that costs nothing --
 # cffdrs' WSV reduces to WS and ROS is still RSI(ISI) x BE, exactly the quantity
-# internal/fbp computes. Slope is what pulls the two apart (see below), so it is
+# this package computes. Slope is what pulls the two apart (see below), so it is
 # swept separately.
 FFMC_VALUES <- c(60, 75, 85, 90, 92, 95)
 WS_VALUES <- c(0, 5, 15, 30, 50)
@@ -96,8 +97,7 @@ for (fuel in GRASS) {
 # opens once there is real wind to vector-add to the slope-equivalent wind, and it
 # depends on the ANGLE between them: WD 0 against Aspect 0 is wind driving straight
 # upslope, WD 180 is wind fighting it. That angle is exactly the wind-slope
-# alignment the per-pixel overlay expresses through that back-solve
-# (docs/analysis/spread-severity-plan.md section 5).
+# alignment a per-pixel overlay expresses through that back-solve.
 #
 # WS/FFMC/BUI values are drawn from the flat sweeps above so every sloped row has
 # a flat counterpart to take its wind-only ISI from.
@@ -105,8 +105,8 @@ for (fuel in GRASS) {
 # The fuel list includes M1/M2 to cover eq. 42's mixedwood ISF blend. Go's
 # slopeEquivalentISF blends the ISF of C2 and D1 rather than blending RSF and
 # inverting once, and drops M2's 0.2 dead-fir weighting in the slope path -- both
-# read off cffdrs' source rather than measured, and fuelmap.FuelType emits M1 in
-# production. Without these rows TestCFFDRSSlopeBackSolve logs that the blend is
+# read off cffdrs' source rather than measured, and M1 is a common real-world
+# mapping. Without these rows TestCFFDRSSlopeBackSolve logs that the blend is
 # unoracled and moves on.
 #
 # FFMC is swept rather than fixed at 85 because 85 is too wet to reach the
@@ -146,7 +146,7 @@ if (!identical(as.integer(as.character(out$ID)), inp$ID)) {
 
 # LB/BROS/FROS are the fire ELLIPSE: how elongated the fire is at the net
 # effective wind, and how fast it runs backwards and sideways. The head rate
-# alone cannot answer "how fast towards MY parcel" -- see fbp/ellipse.go.
+# alone cannot answer "how fast towards MY location" -- see ellipse.go.
 needed <- c("ISI", "BE", "SF", "WSV", "CFB", "FD", "ROS", "LB", "BROS", "FROS")
 missing <- setdiff(needed, names(out))
 if (length(missing)) {
@@ -204,7 +204,7 @@ case_json <- function(i) {
 body <- paste(vapply(seq_len(nrow(inp)), case_json, character(1)), collapse = ",\n")
 json <- paste0(
   '{\n',
-  ' "note": "generated by backend/internal/fbp/testdata/gen_cffdrs_reference.R; do not edit by hand",\n',
+  ' "note": "generated by testdata/gen_cffdrs_reference.R; do not edit by hand",\n',
   ' "oracle": "cffdrs R package (Canadian Forest Service), the authoritative FBP implementation",\n',
   ' "cffdrs_version": ', q(as.character(packageVersion("cffdrs"))), ',\n',
   ' "r_version": ', q(R.version.string), ',\n',

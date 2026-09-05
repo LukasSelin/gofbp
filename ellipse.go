@@ -29,10 +29,10 @@ import "math"
 // term fF untouched. So the two differ by nothing but their wind functions, and
 // fF cancels exactly in the ratio.
 //
-// That cancellation is the point. internal/surface is anchored on SMHI's
-// published ISI and never recomputes it from FFMC (see spreadISI); this lets it
-// express "the same ISI, backing" without ever forming an ISI of its own — the
-// same trick, and the same justification, as the forward ratio there.
+// That cancellation is the point. A caller anchored on a published ISI, which
+// never recomputes it from FFMC, can use this to express "the same ISI, backing"
+// without ever forming an ISI of its own — the same trick, and the same
+// justification, as the forward ratio in ISI's doc.
 //
 // Note BFW has no high-wind branch: unlike windFunction it is the plain
 // exponential at every wind speed. That asymmetry is in the published system.
@@ -157,7 +157,7 @@ func ROSAtAngle(rosHead, rosFlank, rosBack, thetaDeg float64) float64 {
 }
 
 // AngleBetweenDeg is the unsigned angular separation between two bearings, in
-// [0, 180]. It is what turns "the fire heads 210°, my parcel is at 40°" into the
+// [0, 180]. It is what turns "the fire heads 210°, my location is at 40°" into
 // theta ROSAtAngle wants.
 //
 // Unsigned because the ellipse is symmetric about its head axis: 30° left of the

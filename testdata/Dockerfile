@@ -35,7 +35,7 @@ RUN R -q -e "install.packages('remotes')" \
     && R -q -e "remotes::install_version('cffdrs', version='${CFFDRS_VERSION}', upgrade='never')" \
     && R -q -e "stopifnot(packageVersion('cffdrs') == '${CFFDRS_VERSION}'); suppressMessages(library(cffdrs)); cat('cffdrs', as.character(packageVersion('cffdrs')), 'loads OK\n')"
 
-# The script writes to backend/internal/fbp/testdata/cffdrs.json relative to the
-# repo root, so it must run from there. regen-cffdrs.sh mounts the repo here.
+# The script writes to testdata/cffdrs.json relative to the module root, so it
+# must run from there. regen-cffdrs.sh mounts the module root here.
 WORKDIR /repo
-ENTRYPOINT ["Rscript", "backend/internal/fbp/testdata/gen_cffdrs_reference.R"]
+ENTRYPOINT ["Rscript", "testdata/gen_cffdrs_reference.R"]

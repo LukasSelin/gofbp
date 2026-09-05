@@ -23,9 +23,9 @@ func sameBearing(a, b, tolDeg float64) bool {
 // The convention test, and the one the cffdrs fixture structurally cannot
 // provide: every row in it has Aspect 0.
 //
-// Both azimuths in SlopeWind are "pushes towards", so a caller holding SMHI's
-// meteorological wd (wind FROM) and internal/surface's aspect_deg (the DOWNSLOPE
-// aspect) must add 180 to each. This pins that arithmetic with cases worked out
+// Both azimuths in SlopeWind are "pushes towards", so a caller holding a
+// meteorological wd (wind FROM) and an aspect raster (the DOWNSLOPE aspect) must
+// add 180 to each. This pins that arithmetic with cases worked out
 // by hand rather than derived from the same formula being tested.
 //
 // A failure here is the dangerous kind. Getting one of the two offsets wrong does
@@ -166,7 +166,7 @@ func TestNetEffectiveWindDependsOnlyOnRelativeAngle(t *testing.T) {
 //
 // Neither bound is the rare corner it first looks like: at FFMC 95 one or the
 // other fires for most fuels above about 60 % rise, which is ordinary steep dry
-// Swedish ground rather than an edge case. They are what keep the answer a
+// ground rather than an edge case. They are what keep the answer a
 // bounded number rather than a NaN or a runaway, and both cost accuracy in the
 // same, safe direction — the back-solve must still never come out ABOVE
 // RSI · BE · SF, which is what makes ROS's "upper bound, never an
@@ -202,7 +202,7 @@ func TestZeroWindRecoversRSIxBExSF(t *testing.T) {
 	}
 }
 
-// The clamp is documented as reachable in ordinary Swedish conditions. If a
+// The clamp is documented as reachable in ordinary conditions. If a
 // change to the coefficients or to SlopeFactor ever made it unreachable, the
 // inequality branch of TestZeroWindRecoversRSIxBExSF would quietly stop covering
 // anything and its comment would become false. This is what notices.
@@ -290,9 +290,8 @@ func TestEquivalentWindRoundTrip(t *testing.T) {
 //
 // Without the clamp, FFMC 95 on 65 %+ rise drives RSF past the RSI asymptote for
 // C2, C6, S3 and O1B; the log then takes a negative argument and returns NaN.
-// A NaN in spread_m_min is not a visible error — internal/surface reads NaN as
-// "outside the parcel", so it becomes a hole in the overlay, sited exactly on the
-// steepest and driest ground. This also covers FFMC out of range (m^5.31 of a
+// A NaN spread rate is not a loud failure — a caller that reads NaN as no-data
+// gets a silent hole, sited exactly on the steepest and driest ground. This also covers FFMC out of range (m^5.31 of a
 // negative) and an unknown fuel code (ISF 0, log(0) = -Inf).
 func TestEquivalentWindIsNonNegativeAndFiniteEverywhere(t *testing.T) {
 	codes := append(allFuels(), "", "nonsense")
@@ -359,8 +358,8 @@ func TestEquivalentWindMonotonicInSlope(t *testing.T) {
 	}
 }
 
-// Flat ground must be an exact identity, not an approximation. internal/surface
-// relies on this to leave every flat pixel in the country bit-for-bit unchanged.
+// Flat ground must be an exact identity, not an approximation. A caller relies
+// on this to leave every flat cell bit-for-bit unchanged.
 func TestFlatGroundIsAnExactIdentity(t *testing.T) {
 	for _, code := range allFuels() {
 		for _, ws := range []float64{0, 7, 45} {
