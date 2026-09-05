@@ -195,7 +195,7 @@ const EquivalentWindCapKmh = 112.45
 const isfClampMin = 0.01
 
 // ISI is the Initial Spread Index for a given FFMC and 10-m open wind speed in
-// **km/h** — FWI System eqs. 24-26, with the FBP System's high-wind wind
+// km/h (note the unit) — FWI System eqs. 24-26, with the FBP System's high-wind wind
 // function (cffdrs .ISIcalc with fbpMod = TRUE, which fbp() always uses).
 //
 // Wind is km/h because ST-X-3 is. Converting from m/s is the caller's job: this

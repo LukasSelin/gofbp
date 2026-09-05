@@ -1,7 +1,7 @@
 // Package fbp implements the Canadian Forest Fire Behaviour Prediction (FBP)
 // System's head-fire rate of spread.
 //
-// What it produces is a rate of spread in **metres per minute** — a physical
+// What it produces is a rate of spread in metres per minute — a physical
 // quantity, not a danger score. Keeping the two apart matters: a fire-danger
 // index is a unitless number whose range is tied to whatever scale published it,
 // while a spread rate has units that make it checkable against observed fire

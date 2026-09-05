@@ -95,9 +95,21 @@ local)
 	;;
 docker)
 	command -v docker >/dev/null 2>&1 || die "docker not found, and no local R with cffdrs"
+	# Git Bash rewrites anything that looks like a Unix path in an argument, so
+	# "-v $REPO_ROOT:/repo" arrives as "C:/Program Files/Git/repo" and the mount
+	# silently lands somewhere useless. Turn the rewriting off for the run, and
+	# hand Docker the host path in the form Docker Desktop wants.
+	MOUNT_SRC="$REPO_ROOT"
+	case "$(uname -s)" in
+	MINGW* | MSYS* | CYGWIN*)
+		MOUNT_SRC="$(cd "$REPO_ROOT" && pwd -W)"
+		export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL="*"
+		;;
+	esac
+
 	if [ "$DRY_RUN" = 1 ]; then
 		echo "would build: $IMAGE (R $R_VERSION, cffdrs $CFFDRS_VERSION)"
-		echo "would run:   docker run --rm -v $REPO_ROOT:/repo $IMAGE"
+		echo "would run:   docker run --rm -v $MOUNT_SRC:/repo $IMAGE"
 		exit 0
 	fi
 	if [ "$REBUILD" = 1 ] || ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
@@ -114,7 +126,7 @@ docker)
 	if [ "$(uname -s)" != "Darwin" ] && command -v id >/dev/null 2>&1 && [ "$(id -u)" != "0" ]; then
 		case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) ;; *) USER_ARGS=(--user "$(id -u):$(id -g)") ;; esac
 	fi
-	docker run --rm "${USER_ARGS[@]}" -v "$REPO_ROOT:/repo" "$IMAGE"
+	docker run --rm "${USER_ARGS[@]}" -v "$MOUNT_SRC:/repo" "$IMAGE"
 	;;
 esac
 
