@@ -1,0 +1,6 @@
+# Normalize all text files to LF in the index and in the working tree, on every
+# platform. Overrides a developer's global core.autocrlf.
+#
+# Load-bearing, not boilerplate: testdata/regen-cffdrs.sh runs inside a Linux
+# container, and a CRLF shebang fails there as `bad interpreter: /usr/bin/env bash^M`.
+* text=auto eol=lf

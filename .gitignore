@@ -1,0 +1,11 @@
+# The cffdrs oracle fixture is generated, not committed -- see testdata/README.md
+# for why, and testdata/regen-cffdrs.sh for how. The TestCFFDRS* tests skip when
+# it is absent.
+/testdata/cffdrs.json
+
+*.exe
+*.test
+*.out
+go.work
+go.work.sum
+.DS_Store
