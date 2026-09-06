@@ -205,3 +205,102 @@ func TestDigestMismatchDoesNotClaimTheNumbersMoved(t *testing.T) {
 		t.Errorf("a mismatched digest did not block porting (exit %d)", v.Exit)
 	}
 }
+
+// io.Copy hands over arbitrary chunks, and a pattern straddling two of them is
+// the failure this class exists to avoid. Feed it every possible split.
+func TestSubstringCounterSurvivesEveryChunkBoundary(t *testing.T) {
+	body := `{"fuel": "C1"},{"fuel": "C2"},{"fuel": "C3"}`
+	const want = 3
+
+	for split := 1; split < len(body); split++ {
+		c := &substringCounter{pattern: []byte(`"fuel"`)}
+		if _, err := c.Write([]byte(body[:split])); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := c.Write([]byte(body[split:])); err != nil {
+			t.Fatal(err)
+		}
+		if c.count != want {
+			t.Fatalf("split at %d: counted %d, want %d", split, c.count, want)
+		}
+	}
+
+	// And one byte at a time, which is every boundary at once.
+	c := &substringCounter{pattern: []byte(`"fuel"`)}
+	for i := 0; i < len(body); i++ {
+		c.Write([]byte{body[i]})
+	}
+	if c.count != want {
+		t.Errorf("byte at a time: counted %d, want %d", c.count, want)
+	}
+}
+
+func TestHeadWriterKeepsOnlyTheHead(t *testing.T) {
+	w := &headWriter{limit: 8}
+	w.Write([]byte("12345"))
+	w.Write([]byte("67890"))
+	w.Write([]byte("abcdef"))
+	if got := w.String(); got != "12345678" {
+		t.Errorf("got %q, want 12345678", got)
+	}
+}
+
+// The count is taken in the same streaming pass as the digest, so a real file
+// exercises both against each other.
+func TestCaseCountIsTakenOverTheWholeStreamedFile(t *testing.T) {
+	dir := t.TempDir()
+	var b strings.Builder
+	b.WriteString(`{"cffdrs_version": "1.9.2", "r_version": "R version 4.6.1", "cases": [`)
+	const n = 5000
+	for i := 0; i < n; i++ {
+		b.WriteString(`{"fuel": "C1", "ffmc": 90, "ros": 5.0},`)
+	}
+	b.WriteString(`{"fuel": "C2"}]}`)
+
+	path := filepath.Join(dir, "f.json")
+	if err := os.WriteFile(path, []byte(b.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, meta, err := digestAndMeta(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.cases != n+1 {
+		t.Errorf("counted %d cases, want %d", meta.cases, n+1)
+	}
+	if meta.cffdrs != "1.9.2" {
+		t.Errorf("metadata lost: %+v", meta)
+	}
+}
+
+// A stale count is prose drift, not a reason to refuse a port: once the digest
+// matches, the same bytes cannot have a different number of cases, so a mismatch
+// can only mean the docs are behind.
+func TestStaleCaseCountIsANoteNotABlocker(t *testing.T) {
+	v := &verdict{Mode: "port", CanAudit: true, CanPort: true,
+		FixtureCases: 23532, DocumentedCases: 18400}
+	checkCaseCount(v)
+	decide(v)
+
+	if !v.CanPort || v.Exit != exitReady {
+		t.Errorf("a stale case count blocked porting (exit %d, blockers %v)", v.Exit, v.Blockers)
+	}
+	if len(v.Notes) != 1 || !strings.Contains(v.Notes[0], "18400") {
+		t.Errorf("notes = %v, want one naming the number to grep for", v.Notes)
+	}
+
+	var sb strings.Builder
+	printVerdict(&sb, v)
+	if !strings.Contains(sb.String(), "does not block") {
+		t.Errorf("the report does not distinguish a note from a blocker:\n%s", sb.String())
+	}
+}
+
+func TestMatchingCaseCountSaysNothing(t *testing.T) {
+	v := &verdict{Mode: "port", CanAudit: true, CanPort: true,
+		FixtureCases: 23532, DocumentedCases: 23532}
+	checkCaseCount(v)
+	if len(v.Notes) != 0 {
+		t.Errorf("notes = %v, want none", v.Notes)
+	}
+}

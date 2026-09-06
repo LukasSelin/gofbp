@@ -41,6 +41,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -50,6 +51,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/LukasSelin/gofbp/internal/ledger"
@@ -84,12 +86,16 @@ type verdict struct {
 	PinCFFDRS     string `json:"pin_cffdrs,omitempty"`
 	PinR          string `json:"pin_r,omitempty"`
 
+	FixtureCases    int `json:"fixture_cases,omitempty"`
+	DocumentedCases int `json:"documented_cases,omitempty"`
+
 	OracleTests   int `json:"oracle_tests"`
 	OracleSkipped int `json:"oracle_skipped"`
 
 	CanAudit bool     `json:"can_audit"`
 	CanPort  bool     `json:"can_port"`
 	Blockers []string `json:"blockers,omitempty"`
+	Notes    []string `json:"notes,omitempty"`
 	Exit     int      `json:"exit"`
 }
 
@@ -165,6 +171,8 @@ func checkFixture(v *verdict) {
 	}
 	v.FixtureSHA = sum
 	v.FixtureCFFDRS, v.FixtureR = meta.cffdrs, meta.r
+	v.FixtureCases, v.DocumentedCases = meta.cases, documentedCases()
+	checkCaseCount(v)
 
 	versionsMatch := v.PinCFFDRS != "" && v.FixtureCFFDRS == v.PinCFFDRS &&
 		v.PinR != "" && strings.Contains(v.FixtureR, v.PinR)
@@ -208,11 +216,14 @@ func checkFixture(v *verdict) {
 	}
 }
 
-type fixtureMeta struct{ cffdrs, r string }
+type fixtureMeta struct {
+	cffdrs, r string
+	cases     int
+}
 
-// digestAndMeta hashes the fixture and reads the two versions recorded into it,
-// in one pass. The fixture is ~9.5 MB, which is small enough to stream and large
-// enough not to hold twice.
+// digestAndMeta hashes the fixture, reads the two versions recorded into it, and
+// counts its cases — all in one pass. The fixture is ~11 MB, which is small
+// enough to stream and large enough not to hold twice, let alone three times.
 func digestAndMeta(path string) (string, fixtureMeta, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -221,17 +232,62 @@ func digestAndMeta(path string) (string, fixtureMeta, error) {
 	defer f.Close()
 
 	h := sha256.New()
-	// The metadata is in the first few hundred bytes — the generator emits it
+	// The versions are in the first few hundred bytes — the generator emits them
 	// before "cases" — so only the head is kept.
-	var head strings.Builder
-	tee := io.TeeReader(f, h)
-	if _, err := io.Copy(io.Discard, io.TeeReader(io.LimitReader(tee, 4096), &head)); err != nil {
+	head := &headWriter{limit: 4096}
+	// Every case carries exactly one "fuel" key and nothing else in the file does,
+	// so counting that substring counts cases without parsing 11 MB of JSON.
+	counter := &substringCounter{pattern: []byte(`"fuel"`)}
+
+	if _, err := io.Copy(io.MultiWriter(h, head, counter), f); err != nil {
 		return "", fixtureMeta{}, err
 	}
-	if _, err := io.Copy(io.Discard, tee); err != nil {
-		return "", fixtureMeta{}, err
+	meta := parseMeta(head.String())
+	meta.cases = counter.count
+	return hex.EncodeToString(h.Sum(nil)), meta, nil
+}
+
+// headWriter keeps the first limit bytes written to it and discards the rest.
+type headWriter struct {
+	limit int
+	buf   []byte
+}
+
+func (w *headWriter) Write(p []byte) (int, error) {
+	if n := w.limit - len(w.buf); n > 0 {
+		if n > len(p) {
+			n = len(p)
+		}
+		w.buf = append(w.buf, p[:n]...)
 	}
-	return hex.EncodeToString(h.Sum(nil)), parseMeta(head.String()), nil
+	return len(p), nil
+}
+
+func (w *headWriter) String() string { return string(w.buf) }
+
+// substringCounter counts non-overlapping occurrences of a pattern across a
+// stream. The carry is the point: io.Copy hands over arbitrary chunks, and a
+// pattern straddling two of them would otherwise be missed — which for a 32 KB
+// buffer over 11 MB is not a hypothetical.
+type substringCounter struct {
+	pattern []byte
+	count   int
+	carry   []byte
+}
+
+func (c *substringCounter) Write(p []byte) (int, error) {
+	buf := append(c.carry, p...)
+	c.count += bytes.Count(buf, c.pattern)
+
+	// Keep the last len(pattern)-1 bytes: the longest prefix of the pattern that
+	// could still be completed by the next chunk. Anything counted already lies
+	// entirely before that point.
+	keep := len(c.pattern) - 1
+	if keep > len(buf) {
+		keep = len(buf)
+	}
+	c.carry = append(c.carry[:0], buf[len(buf)-keep:]...)
+	return len(p), nil
 }
 
 var (
@@ -368,7 +424,8 @@ func printVerdict(w io.Writer, v *verdict) {
 		p("\n")
 	}
 	if v.FixturePresent {
-		p("fixture  %d bytes, cffdrs %s / R %s\n", v.FixtureBytes, v.FixtureCFFDRS, shortR(v.FixtureR))
+		p("fixture  %d bytes, %d cases, cffdrs %s / R %s\n",
+			v.FixtureBytes, v.FixtureCases, v.FixtureCFFDRS, shortR(v.FixtureR))
 		p("         %s\n", v.FixtureSHA)
 	} else {
 		p("fixture  absent\n")
@@ -394,6 +451,15 @@ func printVerdict(w io.Writer, v *verdict) {
 			"not fine is concluding a transcribed number is right: a wrong one looks\n" +
 			"exactly like a right one without the fixture.\n")
 	}
+
+	// Notes are things to fix, not reasons to stop, so they come after the verdict
+	// rather than inside it.
+	if len(v.Notes) > 0 {
+		p("\nAlso worth fixing (does not block anything):\n")
+		for _, n := range v.Notes {
+			p("  - %s\n", n)
+		}
+	}
 }
 
 func plural(n int) string {
@@ -401,4 +467,48 @@ func plural(n int) string {
 		return ""
 	}
 	return "s"
+}
+
+// documentedCases reads the case count testdata/README.md states. Four files
+// carry that number and none of them is generated, so it is exactly the kind of
+// prose that goes stale quietly: all four said "~18400" across two commits while
+// the generator produced 20716 and then 23532.
+//
+// ledger_test.go checks the four agree with EACH OTHER, which needs no fixture
+// and so runs in CI. What it cannot check is whether they are all wrong
+// together. That needs a real fixture, which is here.
+func documentedCases() int {
+	raw, err := os.ReadFile("testdata/README.md")
+	if err != nil {
+		return 0
+	}
+	m := regexp.MustCompile(`sweep of ([\d,]+) FBP cases`).FindSubmatch(raw)
+	if m == nil {
+		return 0
+	}
+	n, err := strconv.Atoi(strings.ReplaceAll(string(m[1]), ",", ""))
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+// checkCaseCount notes a documented count that disagrees with the fixture in
+// hand. It is a note and not a blocker on purpose: the digest already settles
+// whether this is the right fixture, and once it matches, a wrong count can only
+// mean the prose is stale. Stale prose is worth fixing, not worth refusing to
+// port over.
+func checkCaseCount(v *verdict) {
+	switch {
+	case v.FixtureCases == 0:
+		v.Notes = append(v.Notes, "no cases found in the fixture — is it truncated?")
+	case v.DocumentedCases == 0:
+		v.Notes = append(v.Notes, "testdata/README.md no longer states a case count in a form "+
+			"precheck can find. Restore the sentence or update the pattern.")
+	case v.DocumentedCases != v.FixtureCases:
+		v.Notes = append(v.Notes, fmt.Sprintf("the fixture has %d cases but the docs say %d. "+
+			"Four files carry that number — testdata/README.md, MIGRATION.md, DAILY-CHECK.md "+
+			"and testdata/regen-cffdrs.sh — and they go stale together. Grep %d.",
+			v.FixtureCases, v.DocumentedCases, v.DocumentedCases))
+	}
 }

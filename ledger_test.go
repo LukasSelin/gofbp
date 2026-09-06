@@ -28,6 +28,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -518,5 +519,72 @@ func TestDocsAgreeOnTheNumberOfOracleTests(t *testing.T) {
 					path, m[0], actual, words[actual])
 			}
 		}
+	}
+}
+
+// TestDocsAgreeOnTheSweepSize is the sibling of the test above, for the other
+// number this repository writes down in prose and generates in code.
+//
+// Four files state the fixture's case count and nothing generates any of them.
+// They went stale together once already: all four said "~18400" across two
+// commits while the generator produced 20716 and then 23532, because 8b0cf01
+// widened the sweep and updated none of them.
+//
+// This can only check the four against EACH OTHER — the count itself needs a
+// real fixture, and these tests run on a fresh clone that has none. `precheck`
+// closes that half, comparing the documented number to the fixture in hand.
+// Together they catch both "one file was updated" and "all four are wrong".
+//
+// The patterns are deliberately specific. A loose one matches the 18804 in
+// testdata/README.md's account of the re-baseline, which is a different number
+// about a different thing.
+func TestDocsAgreeOnTheSweepSize(t *testing.T) {
+	sources := []struct{ path, pattern string }{
+		{"testdata/README.md", `sweep of ([\d,]+) FBP cases`},
+		{"MIGRATION.md", `generated ([\d,]+)-case sweep`},
+		{"DAILY-CHECK.md", `— ([\d,]+) cases is not something eyes check`},
+		{"testdata/regen-cffdrs.sh", `(?m)^# ([\d,]+) cases through cffdrs::fbp`},
+	}
+
+	counts := map[string]int{}
+	for _, s := range sources {
+		raw, err := os.ReadFile(s.path)
+		if err != nil {
+			t.Errorf("read %s: %v", s.path, err)
+			continue
+		}
+		m := regexp.MustCompile(s.pattern).FindSubmatch(raw)
+		if m == nil {
+			t.Errorf("%s no longer states the sweep size where this test looks (%s). "+
+				"Restore the sentence or update the pattern — do not delete the check, "+
+				"this number has gone stale before.", s.path, s.pattern)
+			continue
+		}
+		n, err := strconv.Atoi(strings.ReplaceAll(string(m[1]), ",", ""))
+		if err != nil {
+			t.Errorf("%s: %q is not a number", s.path, m[1])
+			continue
+		}
+		counts[s.path] = n
+	}
+
+	var first string
+	for _, s := range sources {
+		n, ok := counts[s.path]
+		if !ok {
+			continue
+		}
+		if first == "" {
+			first = s.path
+			continue
+		}
+		if n != counts[first] {
+			t.Errorf("%s says the sweep is %d cases but %s says %d. They describe the same "+
+				"fixture, so one of them was updated and the other was not.",
+				s.path, n, first, counts[first])
+		}
+	}
+	if first != "" {
+		t.Logf("all %d sources agree: %d cases", len(counts), counts[first])
 	}
 }
