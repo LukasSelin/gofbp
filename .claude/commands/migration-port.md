@@ -1,7 +1,7 @@
 ---
 description: Port one row from the migration ledger — oracle column first, then the Go, then the tests and the ledger
 argument-hint: "[ledger row, e.g. SFC | FMC | CBH/CFL | C6 | TFC] (default: top unblocked)"
-allowed-tools: Bash(git:*), Bash(go test:*), Bash(go build:*), Bash(go vet:*), Bash(./testdata/regen-cffdrs.sh:*), Bash(sha256sum:*), Read, Edit, Write, Glob, Grep, WebFetch
+allowed-tools: Bash(go run ./tools/...:*), Bash(git:*), Bash(go test:*), Bash(go build:*), Bash(go vet:*), Bash(./testdata/regen-cffdrs.sh:*), Bash(sha256sum:*), Read, Edit, Write, Glob, Grep, WebFetch
 ---
 
 Port exactly one row of [MIGRATION.md](../../MIGRATION.md) from 🔴 to ✅.
@@ -26,7 +26,7 @@ The order is not negotiable: a port whose correctness cannot be asserted is not
 a port. Establish which of three cases this row is in, and say which one in your
 first message.
 
-- [ ] `go test ./...` — if the `TestCFFDRS*` tests skip, you have no fixture. Run `./testdata/regen-cffdrs.sh` (Docker; ~10 min the first time) before anything else. Everything below is unverifiable without it.
+- [ ] `go run ./tools/precheck -mode port` — **stop unless it exits 0.** It is the same gate `/migration-check` runs, and it distinguishes the three ways an oracle can be unusable: absent, built against versions the ledger does not pin, or built against the right versions with numbers that moved. Absent means `./testdata/regen-cffdrs.sh` (Docker; ~10 min the first time). The third is a finding — `tools/fixture-diff` against the old fixture names the columns — and is not something to regenerate over. Everything below is unverifiable until this is 0.
 - [ ] Read `testdata/gen_cffdrs_reference.R`'s emit block and `cffdrsCase` in `cffdrs_test.go`, and decide:
 
 **(a) The column already exists.** `fmc` and `sfc` are already emitted and

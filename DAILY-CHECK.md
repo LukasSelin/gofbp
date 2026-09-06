@@ -16,9 +16,23 @@ is right. Only the fixture can tell them apart.
 
 ## 1. Ground truth (2 min)
 
-- [ ] `git fetch && git status` — clean tree, know what branch you are on.
-- [ ] `go test ./...` — green before you touch anything. If it is red, stop; today's job is that.
-- [ ] Note how many `TestCFFDRS*` tests **skipped**. All twelve skipping means you have no fixture, so nothing you conclude today about coefficients is backed by anything.
+- [ ] `git fetch`
+- [ ] `go run ./tools/precheck -mode audit`
+
+  It runs the tests, hashes the fixture, reads the cffdrs and R versions recorded
+  *into* it, compares both against the ledger's pins, and counts the `TestCFFDRS*`
+  skips. Its exit status is the answer:
+
+  | | |
+  |---|---|
+  | 0 | go ahead |
+  | 1 | audit only — the ledger and the upstream diff are fine, a coefficient is not |
+  | 2 | `go test ./...` is red. Stop; today's job is that |
+
+  **Do not reason past a 1.** It means one of: no fixture, a fixture built against
+  versions the ledger does not pin, or one built against the right versions whose
+  numbers moved anyway. The report says which, and the third is a finding to
+  investigate rather than to regenerate over.
 
 ## 2. Upstream drift (3 min)
 
