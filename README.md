@@ -220,6 +220,12 @@ surface-only. Every oracle test excludes C6 by name.
 Also absent: CFC, TFC and HFI, the acceleration model, and everything else
 `cffdrs::fbp()` returns that is not spread geometry.
 
+The three paragraphs above are a summary. [MIGRATION.md](MIGRATION.md) is the
+full account: every file in `cffdrs`'s `R/` with a status, what is deliberately
+out of scope and why, and the order the remaining pieces have to be done in —
+they are not independent, and porting them out of order produces code the oracle
+cannot yet check.
+
 ## Slope: two paths, and why `ROS` is an upper bound
 
 The FBP System does not treat slope as a multiplier. It routes slope through a
@@ -318,6 +324,14 @@ and how to read a regeneration.
 Issues and pull requests welcome. `go test ./...` is the whole build. A change to
 any coefficient or equation needs the oracle: regenerate the fixture, run
 `go test . -run TestCFFDRS`, and say in the PR what the reference numbers did.
+
+To port something still missing, start from [MIGRATION.md](MIGRATION.md)'s
+dependency order rather than from whichever row looks smallest, and decide how
+the oracle will assert it *before* writing the Go — for two of the remaining
+rows the fixture column already exists, and for one of them no column can exist
+at all. [DAILY-CHECK.md](DAILY-CHECK.md) is the procedure that keeps the ledger
+matching the code, including on the days nothing moves. `/migration-check` and
+`/migration-port` run the two halves of it.
 
 ## Licence
 
