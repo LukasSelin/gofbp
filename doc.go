@@ -31,8 +31,10 @@
 //
 // Implemented: RSI (initial spread), the buildup effect BE, the slope factor SF,
 // the Initial Spread Index ISI, the equivalent-wind slope back-solve
-// (EquivalentWind / NetEffectiveWind, giving WSE/WSV/RAZ), ROS, and the fire
-// ellipse (LengthToBreadth, BackISIRatio, FlankROS, ROSAtAngle).
+// (EquivalentWind / NetEffectiveWind, giving WSE/WSV/RAZ), ROS, the fire
+// ellipse (LengthToBreadth, BackISIRatio, FlankROS, ROSAtAngle), and the
+// crown-fire threshold (CriticalSurfaceIntensity, CriticalSurfaceROS,
+// CrownFractionBurned, DescribeFire, giving CSI/RSO/CFB/FD).
 //
 // Full FBP does not treat slope as a multiplier at all. It routes slope through a
 // zero-wind spread rate RSZ, scales it by SF to get RSF, back-solves the ISI (and
@@ -54,9 +56,9 @@
 // The error is entirely a wind-DIRECTION effect, because RSI · BE · SF applies
 // the full slope factor no matter which way the wind blows:
 //
-//	wind driving upslope   median 1.14x, worst 6.54x
-//	wind cross-slope       median 1.80x
-//	wind opposing slope    median 4.18x, p95 84x, worst 99x
+//	wind driving upslope   median 1.24x, p95 5.91x, worst 6.54x
+//	wind cross-slope       median 1.85x, p95 5.95x, worst 7.25x
+//	wind opposing slope    median 2.98x, p95 74x,   worst 99x
 //
 // At zero wind the two usually agree exactly — with nothing to vector-add, the
 // back-solve is an identity. Two exceptions, and neither is exotic: mixedwood
@@ -69,10 +71,33 @@
 // upslope column: even with the wind helping, ROS is not a safe stand-in on
 // steep dry ground.
 //
-// NOT implemented: crown fire. 3689 of the fixture's 11500 cases carry CFB != 0
-// and are excluded from every assertion here, so above the crowning threshold
-// this package reports surface spread only. That is now the largest remaining
-// gap between it and the published system.
+// # Crown fire
+//
+// The THRESHOLD is implemented — critical surface intensity CSI, the surface
+// spread rate RSO that reaches it, crown fraction burned CFB, and the fire
+// description FD. See crown.go.
+//
+// What that does and does not change is worth being exact about, because the
+// natural assumption is wrong in both directions. It does not raise any spread
+// rate: in the published system the final rate of spread IS the surface rate for
+// every fuel type except C6, which alone has a separate crown rate of spread
+// folded in through CFB. So for fourteen of the fifteen fuels here, a crowning
+// stand's ROS was already right, and CFB is the missing statement of what kind of
+// fire that rate describes — surface, intermittent crown, or continuous crown.
+// That statement was the actual gap, not an arithmetic one.
+//
+// Not implemented, and all of it caller-supplied instead: foliar moisture content
+// FMC (from latitude, longitude, elevation and date), surface fuel consumption
+// SFC (from FFMC and BUI per fuel), and the published per-fuel CBH and CFL
+// default tables. The last is the one with teeth — without those tables a caller
+// has no source for crown base height or crown fuel load inside this package and
+// must bring its own, and CFL in particular is what keeps the fuels with no crown
+// (D1, S1-S3, O1A, O1B) reporting zero.
+//
+// Also not implemented: C6's crown rate of spread RSC, so C6's ROS here remains
+// surface-only and every oracle test excludes it by name; and the consumption and
+// intensity outputs CFC, TFC and HFI, which depend on CFB but are a separate
+// quantity from spread.
 //
 // Coefficients are the published FBP tables (Forestry Canada Fire Danger Group
 // 1992, ST-X-3, Tables 6–7), with the grass curing revision from Wotton,
@@ -90,6 +115,12 @@
 // are easiest to get wrong and hardest to reach — the M1/M2 ISF blend, the
 // high-wind inverse above HighWindKmh, and the EquivalentWindCapKmh saturation —
 // are checked against the oracle rather than against our own reasoning.
+//
+// The crown sweep carries explicit crown base heights and a latitude/day-of-year
+// spread, because CBH and FMC are the only handles on eqs. 56 and 58 and a
+// fixture at one of each would reproduce them at a point rather than oracle them.
+// CSI, RSO, CFB and FD all reproduce cffdrs to machine precision there, CFB both
+// from cffdrs' own spread rate and end to end from this package's.
 //
 // Regenerate the reference with:
 //

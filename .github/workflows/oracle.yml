@@ -1,0 +1,81 @@
+# The oracle, run for real.
+#
+# The Go workflow cannot do this. testdata/cffdrs.json is generated rather than
+# committed (it is ~9.5 MB produced by GPL-2 software, from an MIT repo — see
+# testdata/README.md), so on a fresh checkout every TestCFFDRS* skips and a green
+# "Go" badge means the identities, round-trips, invariants and NaN sweeps pass.
+#
+# Those forbid most transcription errors. They cannot catch the one class that
+# matters most: an error inherited from the 1992 source itself, where a second
+# careful transcription agrees precisely in being wrong. That is exactly what the
+# grass-curing bug was — fully cured grass spreading 2.2x too fast, from a source
+# defect no amount of self-consistency could see. Only cffdrs finds those, so
+# this job builds it and runs the comparison.
+#
+# Monthly rather than per-push because the inputs move slowly and the build is
+# expensive: an R toolchain plus GDAL, then ~20700 cases through cffdrs::fbp().
+# A failure here is either this package drifting or cffdrs changing under us, and
+# both are things to read rather than to re-run until green.
+name: Oracle
+
+on:
+  schedule:
+    # 06:00 UTC on the 1st of each month.
+    - cron: "0 6 1 * *"
+  # Deliberately also on demand and NOT on push. Every run rebuilds the container
+  # from scratch — runners are ephemeral, so there is no layer cache to hit — and
+  # putting that on each push to main would spend half an hour of CI to re-derive
+  # numbers that did not change. Changing a coefficient or the generator does
+  # invalidate the comparison, so dispatch this when you do; the READMEs say so.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  oracle:
+    runs-on: ubuntu-latest
+    # The first build pulls rocker/r-ver and GDAL and installs cffdrs from
+    # source. Generous, but bounded: a hang here should fail, not idle.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+
+      # --docker rather than the script's auto-detection. A runner image that
+      # happens to ship R would otherwise silently change which cffdrs version
+      # this asserts against, and the whole point of the container is that both
+      # versions are pinned and recorded into the fixture.
+      - name: Generate the fixture from cffdrs
+        run: ./testdata/regen-cffdrs.sh --docker
+
+      # Printed so the digest recorded in testdata/README.md can be checked
+      # against a real regeneration without downloading the artifact.
+      - name: Report the fixture's provenance
+        run: |
+          sha256sum testdata/cffdrs.json
+          grep -o '"cffdrs_version": "[^"]*"' testdata/cffdrs.json
+          grep -o '"r_version": "[^"]*"' testdata/cffdrs.json
+
+      # -v because these tests log what they actually asserted — per-fuel case
+      # counts, worst relative errors, the slope-divergence percentiles and the
+      # FD class counts. A pass with a collapsed case count is the failure mode
+      # the anti-no-op floors guard against, and the log is where you see it.
+      - name: Run the oracle tests
+        run: go test -v -run TestCFFDRS ./...
+
+      # Kept on failure so a disagreement can be read against the actual numbers
+      # rather than reproduced locally first. Not kept on success: it is large,
+      # regenerable, and GPL-2 output that this repository deliberately does not
+      # distribute.
+      - name: Upload the fixture for inspection
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cffdrs-fixture
+          path: testdata/cffdrs.json
+          retention-days: 7

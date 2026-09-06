@@ -1,6 +1,7 @@
 # gofbp
 
-[![CI](https://github.com/LukasSelin/gofbp/actions/workflows/ci.yml/badge.svg)](https://github.com/LukasSelin/gofbp/actions/workflows/ci.yml)
+[![Go](https://github.com/LukasSelin/gofbp/actions/workflows/go.yml/badge.svg)](https://github.com/LukasSelin/gofbp/actions/workflows/go.yml)
+[![Oracle](https://github.com/LukasSelin/gofbp/actions/workflows/oracle.yml/badge.svg)](https://github.com/LukasSelin/gofbp/actions/workflows/oracle.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/LukasSelin/gofbp.svg)](https://pkg.go.dev/github.com/LukasSelin/gofbp)
 
 The Canadian Forest Fire Behaviour Prediction (FBP) System's head-fire rate of
@@ -113,17 +114,54 @@ rate alone is the wrong number for "how fast is this coming at *me*". See
 - `ROS` — head-fire rate of spread
 - The fire ellipse: `LengthToBreadth`, `BackISIRatio`, `FlankROS`, `ROSAtAngle`,
   `AngleBetweenDeg`
+- The crown-fire threshold: `CriticalSurfaceIntensity` (CSI),
+  `CriticalSurfaceROS` (RSO), `CrownFractionBurned` (CFB), `DescribeFire` (FD)
+
+## Crown fire: the threshold, not the inputs
+
+`CrownFractionBurned` answers whether the fire is still in the surface fuels, and
+`DescribeFire` folds that into the published system's three classes — surface,
+intermittent crown, continuous crown.
+
+It does **not** change any spread rate, and that is the published system's own
+behaviour rather than a shortcut. In FBP the final rate of spread is the surface
+rate for every fuel type except C6, which alone has a separate crown rate of
+spread blended in through CFB. So for fourteen of the fifteen fuels the spread
+rate was already right; what was missing was the statement of what kind of fire
+it describes.
+
+You supply the inputs. `Crown` takes foliar moisture content (FMC), surface fuel
+consumption (SFC), crown base height (CBH) and crown fuel load (CFL), and none of
+those four is derived here:
+
+```go
+cfb := fbp.CrownFractionBurned(fbp.Crown{
+    FMC: 97, SFC: 2.5, CBH: 3, CFL: 0.8,
+    SurfaceROS: surfaceROS, // RSI·BE on the net effective wind — NOT RSI·BE·SF
+})
+fd := fbp.DescribeFire(cfb) // "S", "I" or "C"
+```
+
+`SurfaceROS` must be the surface rate from the full slope path, not `ROS`'s
+`RSI · BE · SF` product. The slope is already inside the net effective wind, and
+feeding the simplified product here over-predicts crowning by the whole slope
+factor — up to tenfold, straight into an exponential.
 
 ## What is not implemented
 
-**Crown fire.** 3689 of the reference fixture's 11500 cases carry `CFB != 0` and
-are excluded from every assertion here, so above the crowning threshold this
-package reports **surface spread only**. That is the largest remaining gap
-between it and the published system, and you should know it before using this
-where crowning is plausible.
+**Crown-fire inputs and the per-fuel crown tables.** FMC (from latitude,
+longitude, elevation and date), SFC (from FFMC and BUI per fuel), and the
+published per-fuel CBH and CFL defaults are all absent. The last one has teeth:
+there is no crown base height or crown fuel load source inside this package, so a
+caller must bring its own — and CFL is what keeps the fuels with no crown (D1,
+S1–S3, O1A, O1B) reporting zero.
 
-Also absent: FMC, SFC, TFC and HFI, foliar moisture, the acceleration model, and
-everything else `cffdrs::fbp()` returns that is not spread geometry.
+**C6's crown rate of spread.** C6 is the one fuel whose ROS depends on CFB, and
+its crown path (RSC) is not implemented, so C6's spread rate here is
+surface-only. Every oracle test excludes C6 by name.
+
+Also absent: CFC, TFC and HFI, the acceleration model, and everything else
+`cffdrs::fbp()` returns that is not spread geometry.
 
 ## Slope: two paths, and why `ROS` is an upper bound
 
@@ -140,9 +178,9 @@ ground is an **upper bound, never an under-estimate**:
 
 | wind vs. slope | median | p95 | worst |
 |---|---|---|---|
-| driving upslope | 1.14x | — | 6.54x |
-| cross-slope | 1.80x | — | — |
-| opposing slope | 4.18x | 84x | 99x |
+| driving upslope | 1.24x | 5.91x | 6.54x |
+| cross-slope | 1.85x | 5.95x | 7.25x |
+| opposing slope | 2.98x | 74x | 99x |
 
 Note the upslope row: even with the wind helping, `ROS` is not a safe stand-in on
 steep dry ground.
@@ -180,10 +218,18 @@ It has earned that twice:
 returns the ellipse's parameters, not a rate at an arbitrary bearing — so it is
 pinned by exact identities at 0° and 180° plus a shape assertion instead.
 
-**CI does not run the oracle.** The 3.6 MB fixture is generated rather than
-committed, so the twelve fixture-backed tests skip on a fresh clone and CI green
-means the identities, round-trips, invariants and NaN sweeps pass. A separate
-monthly workflow regenerates the fixture and runs the oracle for real.
+**The `Go` workflow does not run the oracle.** The 9.5 MB fixture is generated
+rather than committed, so the fifteen fixture-backed tests skip on a fresh clone
+and a green `Go` badge means the identities, round-trips, invariants and NaN
+sweeps pass.
+
+The `Oracle` workflow is the other half. It builds the pinned cffdrs container,
+regenerates the fixture and runs the `TestCFFDRS*` tests for real, monthly and on
+demand. Its badge is the one that says the coefficient tables are still right.
+
+It is not on push, because every run rebuilds an R and GDAL image from scratch.
+After changing a coefficient or the generator, dispatch it — or just run
+`./testdata/regen-cffdrs.sh` locally, which is the same thing.
 
 ## Regenerating the fixture
 

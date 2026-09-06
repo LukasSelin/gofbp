@@ -48,6 +48,21 @@ GS_VALUES <- c(0, 5, 15, 30, 45, 60, 69.9, 70, 100, 200)
 PC_VALUES <- c(0, 25, 50, 75, 100)   # mixedwood conifer share
 PDF_VALUES <- c(0, 35, 100)          # M2 dead fir share
 CC_VALUES <- c(20, 50, 80, 100)      # grass curing
+# Crown-fire threshold sweeps. CBH is metres to the base of the crown and LAT/Dj
+# are how foliar moisture content is reached -- FMC is a function of latitude,
+# longitude, elevation and how far the day of year is from the annual minimum, so
+# sweeping Dj is the only way to move it. See the crown block below.
+CBH_VALUES <- c(2, 3, 7, 20)
+LAT_VALUES <- c(45, 60)
+# Chosen against where the FMC minimum actually falls, not spread evenly over the
+# year. FMC is 120 flat once the day of year is 50 days or more from that
+# minimum (eq. 8), and the minimum sits near day 147 at LAT 45 and near day 196 at
+# LAT 60 for this sweep's longitude -- so an even spread puts most rows on the
+# plateau and the 25.9 coefficient in eq. 56 is then pinned at one value. These
+# four straddle both minima and reach the quadratic branch (eq. 6) and the linear
+# one (eq. 7) as well as the plateau. Check the count TestCFFDRSCrownThreshold
+# logs if you change them.
+DJ_VALUES <- c(150, 175, 200, 240)
 
 CONIFER <- c("C1", "C2", "C3", "C4", "C5", "C6", "C7")
 SIMPLE <- c(CONIFER, "D1", "S1", "S2", "S3")
@@ -56,11 +71,21 @@ GRASS <- c("O1a", "O1b")
 
 # fbp() wants every column present for every row, so unused ones get harmless
 # in-range defaults: they do not enter the fuels that ignore them.
-base_row <- function(fuel, ffmc, bui, ws, gs, pc = 50, pdf = 35, cc = 80) {
+#
+# CBH and CFL default to -1, the sentinel that makes fbp() substitute its own
+# per-fuel table. That is deliberate for the surface sweeps -- they assert
+# quantities crown fire does not enter -- but it makes those rows USELESS for
+# asserting the crown threshold, because the fixture would record the -1 we sent
+# rather than the value cffdrs actually used, and fbp() does not return either
+# one. The crown block below therefore passes both explicitly, inside the ranges
+# fbp() honours verbatim: CBH in (0, 50] and CFL in (0, 2]. Send a value outside
+# those and it is silently replaced by the table, which is the same trap again.
+base_row <- function(fuel, ffmc, bui, ws, gs, pc = 50, pdf = 35, cc = 80,
+                     cbh = -1, cfl = -1, lat = 60, dj = 200) {
   data.frame(
-    FuelType = fuel, LAT = 60, LONG = 15, ELV = 0, Dj = 200, D0 = 0,
+    FuelType = fuel, LAT = lat, LONG = 15, ELV = 0, Dj = dj, D0 = 0,
     FFMC = ffmc, BUI = bui, WS = ws, WD = 0, GS = gs, Aspect = 0,
-    PC = pc, PDF = pdf, cc = cc, GFL = 0.35, CBH = -1, CFL = -1,
+    PC = pc, PDF = pdf, cc = cc, GFL = 0.35, CBH = cbh, CFL = cfl,
     hr = 1, theta = 0, Accel = 0, montane = 0,
     stringsAsFactors = FALSE
   )
@@ -126,6 +151,49 @@ for (fuel in c("C2", "C3", "D1", "S1", "O1b", "M1", "M2")) {
   }
 }
 
+# Crown-fire threshold. A block of its own rather than more columns on the sweeps
+# above, for two reasons: it keeps the growth bounded (this is ~9200 rows against
+# the ~11500 that were here before), and it leaves every existing test's case
+# count untouched, so a regeneration that changes one of them is a real signal
+# rather than a side effect of this addition.
+#
+# What has to VARY, and why each one is here:
+#
+#   CBH  drives CSI directly (eq. 56) and is the input a caller is most likely to
+#        get from stand inventory rather than a table. 2 m to 20 m spans the
+#        published per-fuel values.
+#   LAT  and Dj are the only handles on FMC. FMC is not an fbp() input the way
+#        ISI is not -- it is derived from location and the distance in days from
+#        the annual minimum, so a fixture at one latitude and one date pins the
+#        crown equations at a single foliar moisture and says nothing about the
+#        25.9 coefficient. See DJ_VALUES for how the dates were picked; LAT 45/60
+#        moves where the minimum falls, which is what makes the same date reach a
+#        different moisture.
+#   GS   at 0 and 30 % because CFB is computed from the SURFACE rate on the full
+#        slope path (RSI(ISI(WSV)) x BE, no SF), so a flat-only sweep would not
+#        check that the slope reaches the threshold through the back-solve.
+#
+# CFL is FIXED at 1.0 and that is not an oversight. It enters none of the
+# quantities emitted here: fbp() uses it as a gate on CFB, zeroing it where CFL is
+# not positive, and otherwise only in the consumption outputs this fixture does
+# not carry. Sweeping it would buy nothing, and the one value worth testing -- 0, the published entry for the
+# fuels that have no crown -- cannot be sent, because fbp() reads a non-positive
+# CFL as "use the table". The gate is asserted in crown_test.go instead.
+#
+# C6 is included, and only its CSI and RSO are usable. C6 is the single fuel
+# whose ROS depends on CFB, through a separate crown rate of spread this package
+# does not implement, so its cfb and ros columns are a different quantity. The Go
+# side excludes it by name and says so.
+for (fuel in c("C1", "C2", "C3", "C4", "C5", "C6", "C7", "D1", "M1", "M2", "S1", "O1b")) {
+  for (ffmc in c(85, 92, 95)) for (bui in c(40, 100)) {
+    for (ws in c(0, 30)) for (gs in c(0, 30)) {
+      for (cbh in CBH_VALUES) for (lat in LAT_VALUES) for (dj in DJ_VALUES) {
+        add(base_row(fuel, ffmc, bui, ws, gs, cbh = cbh, cfl = 1.0, lat = lat, dj = dj))
+      }
+    }
+  }
+}
+
 inp <- do.call(rbind, rows)
 # Carry an explicit ID. Without one, fbp() auto-assigns 1..n and returns its rows
 # sorted by ID as a STRING -- for n > 9 that is 1, 10, 100, 1000, 2, ... and reading
@@ -147,7 +215,15 @@ if (!identical(as.integer(as.character(out$ID)), inp$ID)) {
 # LB/BROS/FROS are the fire ELLIPSE: how elongated the fire is at the net
 # effective wind, and how fast it runs backwards and sideways. The head rate
 # alone cannot answer "how fast towards MY location" -- see ellipse.go.
-needed <- c("ISI", "BE", "SF", "WSV", "CFB", "FD", "ROS", "LB", "BROS", "FROS")
+#
+# FMC, SFC, CSI and RSO are the crown-fire threshold's chain. They are carried
+# rather than recomputed on the Go side because FMC and SFC are deliberately NOT
+# implemented there -- the Go package takes them as caller-supplied inputs, so the
+# fixture is where they have to come from. CSI and RSO are the intermediate steps
+# the Go side does implement, and having them separately is what lets a failure
+# localise to eq. 56 or eq. 57 rather than to "CFB is wrong".
+needed <- c("ISI", "BE", "SF", "WSV", "CFB", "FD", "ROS", "LB", "BROS", "FROS",
+            "FMC", "SFC", "CSI", "RSO")
 missing <- setdiff(needed, names(out))
 if (length(missing)) {
   stop("cffdrs ", packageVersion("cffdrs"), " did not return: ",
@@ -188,10 +264,18 @@ case_json <- function(i) {
     ', "pc": ', num(inp$PC[i]),
     ', "pdf": ', num(inp$PDF[i]),
     ', "cc": ', num(inp$cc[i]),
+    ', "cbh": ', num(inp$CBH[i]),
+    ', "cfl": ', num(inp$CFL[i]),
+    ', "lat": ', num(inp$LAT[i]),
+    ', "dj": ', num(inp$Dj[i]),
     ', "isi": ', num(out$ISI[i]),
     ', "be": ', num(out$BE[i]),
     ', "sf": ', num(out$SF[i]),
     ', "wsv": ', num(out$WSV[i]),
+    ', "fmc": ', num(out$FMC[i]),
+    ', "sfc": ', num(out$SFC[i]),
+    ', "csi": ', num(out$CSI[i]),
+    ', "rso": ', num(out$RSO[i]),
     ', "cfb": ', num(out$CFB[i]),
     ', "fd": ', q(as.character(out$FD[i])),
     ', "ros": ', num(out$ROS[i]),
@@ -215,4 +299,9 @@ dir.create(dirname(OUT), recursive = TRUE, showWarnings = FALSE)
 writeLines(json, OUT, useBytes = TRUE)
 cat(sprintf("wrote %d cases -> %s\n", nrow(inp), OUT))
 cat(sprintf("  flat/surface rows usable for ROS parity: %d\n",
-            sum(inp$GS == 0 & out$CFB == 0)))
+            sum(inp$GS == 0 & inp$FuelType != "C6")))
+cat(sprintf("  rows usable for the crown threshold (explicit CBH/CFL): %d, of which %d crown\n",
+            sum(inp$CBH > 0 & inp$CFL > 0),
+            sum(inp$CBH > 0 & inp$CFL > 0 & out$CFB > 0)))
+cat(sprintf("  fire descriptions: S %d, I %d, C %d\n",
+            sum(out$FD == "S"), sum(out$FD == "I"), sum(out$FD == "C")))

@@ -35,10 +35,23 @@ type cffdrsCase struct {
 	PC   float64 `json:"pc"`
 	PDF  float64 `json:"pdf"`
 	CC   float64 `json:"cc"`
+	// CBH and CFL are the crown-fire inputs as SENT. They are -1 on the surface
+	// sweeps, the sentinel that makes fbp() substitute its own per-fuel table —
+	// and since fbp() returns neither, those rows cannot say what values the
+	// oracle actually used. Only rows with CBH > 0 and CFL > 0 are usable for the
+	// crown assertions; see usableForCrown.
+	CBH  float64 `json:"cbh"`
+	CFL  float64 `json:"cfl"`
+	LAT  float64 `json:"lat"`
+	DJ   float64 `json:"dj"`
 	ISI  float64 `json:"isi"`
 	BE   float64 `json:"be"`
 	SF   float64 `json:"sf"`
 	WSV  float64 `json:"wsv"`
+	FMC  float64 `json:"fmc"`
+	SFC  float64 `json:"sfc"`
+	CSI  float64 `json:"csi"`
+	RSO  float64 `json:"rso"`
 	CFB  float64 `json:"cfb"`
 	FD   string  `json:"fd"`
 	ROS  float64 `json:"ros"`
@@ -46,6 +59,10 @@ type cffdrsCase struct {
 	BROS float64 `json:"bros"`
 	FROS float64 `json:"fros"`
 }
+
+// usableForCrown reports whether a case carries crown inputs this package can be
+// fed. See the CBH/CFL note above.
+func (c cffdrsCase) usableForCrown() bool { return c.CBH > 0 && c.CFL > 0 }
 
 type cffdrsFixture struct {
 	Oracle        string       `json:"oracle"`
@@ -78,6 +95,21 @@ func loadCFFDRS(t *testing.T) cffdrsFixture {
 	t.Logf("oracle: %s %s (%s), %d cases", f.Oracle, f.CFFDRSVersion, f.RVersion, len(f.Cases))
 	return f
 }
+
+// crownChangesROS reports whether cffdrs' reported ROS for a case is a different
+// quantity from the surface rate this package computes.
+//
+// It is FUEL TYPE, not CFB > 0, and the difference recovered several thousand
+// cases of oracle coverage. cffdrs' rate_of_spread() returns the surface rate RSS
+// unchanged for every fuel except C6, folding CFB in only through C6's separate
+// crown rate of spread — so a crowning C1 stand has exactly the same reported ROS
+// it would have had with no crown model at all. These tests previously excluded
+// every case with CFB != 0, which discarded 3689 of the fixture's 11500 rows to
+// avoid a divergence that, outside C6, does not exist.
+//
+// If that reading is ever wrong, the tests using this fail loudly with a ratio
+// attached. Do not widen it back to CFB != 0 to make a failure go away.
+func crownChangesROS(c cffdrsCase) bool { return ourFuel(c.Fuel) == "C6" }
 
 func closeEnough(got, want, tol float64) bool {
 	return math.Abs(got-want) <= tol*math.Max(1, math.Abs(want))
@@ -177,8 +209,8 @@ func TestCFFDRSInitialSpreadIndex(t *testing.T) {
 // of the current script would change that. TestUpslopeConventionIsAspectPlus180
 // and TestNetEffectiveWindRotationalInvariance carry that half.
 //
-// CFB > 0 is excluded for the same reason as TestCFFDRSSurfaceROS: crown fire is
-// not modelled here at all.
+// C6 is excluded for the same reason as in TestCFFDRSSurfaceROS: it is the one
+// fuel whose reported ROS is not the surface rate. See crownChangesROS.
 func TestCFFDRSSlopeBackSolve(t *testing.T) {
 	f := loadCFFDRS(t)
 	const tol = 1e-9
@@ -186,7 +218,7 @@ func TestCFFDRSSlopeBackSolve(t *testing.T) {
 	n, shown := 0, 0
 	var worstWSV, worstROS float64
 	for i, c := range f.Cases {
-		if c.GS <= 0 || c.CFB != 0 {
+		if c.GS <= 0 || crownChangesROS(c) {
 			continue
 		}
 		fuel := ourFuel(c.Fuel)
@@ -271,13 +303,14 @@ func relErr(got, want float64) float64 {
 
 // The real coefficient check: RSI's (a, b, c) per fuel, composed with BE.
 //
-// Restricted to flat ground with no crowning, which is where this package's
-// output and full FBP's are the same quantity. Wind is allowed and wanted — on
-// flat ground cffdrs' net effective wind reduces to WS and ROS is still
-// RSI(ISI) × BE, so sweeping wind is just how the fixture reaches high ISI.
+// Restricted to flat ground and to fuels other than C6, which is where this
+// package's output and full FBP's are the same quantity. Wind is allowed and
+// wanted — on flat ground cffdrs' net effective wind reduces to WS and ROS is
+// still RSI(ISI) × BE, so sweeping wind is just how the fixture reaches high ISI.
 // Slope is the one input that pulls the two apart (TestCFFDRSSlopeDivergence),
-// and CFB > 0 means cffdrs has added a crown-fire contribution this package does
-// not model at all.
+// and C6 is the one fuel whose reported ROS carries a crown contribution — see
+// crownChangesROS, which is where the old CFB != 0 exclusion used to be and why
+// it was too broad.
 func TestCFFDRSSurfaceROS(t *testing.T) {
 	f := loadCFFDRS(t)
 	const tol = 1e-8
@@ -285,7 +318,7 @@ func TestCFFDRSSurfaceROS(t *testing.T) {
 	bad := map[string]int{}
 	shown := 0
 	for i, c := range f.Cases {
-		if c.GS != 0 || c.CFB != 0 {
+		if c.GS != 0 || crownChangesROS(c) {
 			continue
 		}
 		fuel := ourFuel(c.Fuel)
@@ -360,7 +393,14 @@ func TestCFFDRSSlopeDivergence(t *testing.T) {
 	var worst worstCase
 	unpaired, noWind, noWindBound := 0, 0, 0
 	for _, c := range f.Cases {
-		if c.GS <= 0 || c.CFB != 0 || c.ROS == 0 {
+		// The crown sweep's rows are skipped even though they are sloped, and the
+		// reason is that this test reports PERCENTILES. They are a statement about
+		// a population, so the population has to be the one deliberately designed
+		// for it — the sloped sweep, which varies wind direction through all four
+		// quadrants. The crown block holds WD at 0, so folding its rows in here
+		// would triple the wind-aligned bucket and move every median below
+		// without a single new measurement behind the change.
+		if c.GS <= 0 || crownChangesROS(c) || c.ROS == 0 || c.usableForCrown() {
 			continue
 		}
 		isi, ok := flatISI[key(c)]
