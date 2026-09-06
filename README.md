@@ -294,6 +294,36 @@ It is not on push, because every run rebuilds an R and GDAL image from scratch.
 After changing a coefficient or the generator, dispatch it — or just run
 `./testdata/regen-cffdrs.sh` locally, which is the same thing.
 
+## Capabilities
+
+This package is arithmetic on floats. It opens no files, makes no network calls,
+runs no subprocesses, uses no reflection and no cgo — importing it adds nothing
+to a caller's attack surface.
+
+That is asserted rather than claimed, and it is an invariant rather than a
+baseline. The `Go` workflow runs [Capslock](https://github.com/google/capslock)
+against an empty capability set and fails the build if the transitive call graph
+grows one. There is no `capabilities.json` to regenerate: the expected value is
+written in the workflow, so widening it means editing that file, in the diff, on
+purpose.
+
+The check exists because this failure is quiet. Reaching for `os.Getenv` to read
+a fuel table, or a logging package that opens a file, breaks no test at all; it
+changes what every consumer is trusting, and it does not look like anything in a
+diff full of coefficients.
+
+To run it locally:
+
+```
+go install github.com/google/capslock/cmd/capslock@v0.3.3
+echo '{}' > /tmp/no-capabilities.json
+capslock -packages=./... -output=compare /tmp/no-capabilities.json
+```
+
+A failure names the capability and the call path that introduced it. Test files
+are out of scope: the fixture tests read `testdata` and shell out to Docker,
+which is fine, and is not what a consumer links.
+
 ## Regenerating the fixture
 
 ```
