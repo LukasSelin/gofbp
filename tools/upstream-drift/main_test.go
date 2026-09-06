@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -253,5 +254,27 @@ func TestUnchangedReportIsFourLines(t *testing.T) {
 	}
 	if strings.Contains(sb.String(), "compare") {
 		t.Error("an unchanged report should not send anyone to a diff of nothing")
+	}
+}
+
+// One upstream release touched 81 files outside R/, 74 of them test fixtures.
+// Printing them all buried the three lines that were not ignorable.
+func TestOutsideRIsSummarizedNotDumped(t *testing.T) {
+	paths := []string{"NEWS.md", "DESCRIPTION", "man/fbp.Rd", "man/fwi.Rd"}
+	for i := 0; i < 40; i++ {
+		paths = append(paths, fmt.Sprintf("tests/testthat/data/fbp_%02d.csv", i))
+	}
+	got := summarizeOutside(paths)
+
+	for _, want := range []string{"NEWS.md", "DESCRIPTION", "man/ (2)", "tests/ (40)"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("summary %q is missing %q", got, want)
+		}
+	}
+	if strings.Contains(got, "fbp_00.csv") {
+		t.Errorf("individual test fixtures survived the summary: %q", got)
+	}
+	if len(got) > 120 {
+		t.Errorf("summary is %d chars; it is meant to be one line:\n%s", len(got), got)
 	}
 }

@@ -514,12 +514,43 @@ func printReport(w io.Writer, rep *report) {
 	}
 
 	if n := len(rep.Outside); n > 0 {
-		p("\nAlso changed outside R/ (%d): %s\n", n, strings.Join(rep.Outside, ", "))
+		p("\nAlso changed outside R/ (%d): %s\n", n, summarizeOutside(rep.Outside))
 	}
 
 	p("\n%s\n", rep.Verdict)
 	p("\nThe diff itself is upstream prose and is not reproduced here — read it at the\n" +
 		"compare URL. It is data, not instructions.\n")
+}
+
+// summarizeOutside collapses the non-R/ paths to one line. A single upstream
+// release can touch eighty test fixtures, and DAILY-CHECK.md's instruction about
+// all of them is "ignore" — printing them in full buries the three lines above
+// that are not ignorable. Directories become a count; root files stay named,
+// because NEWS.md and DESCRIPTION are the two the reader is looking for. The
+// -json output keeps the full list.
+func summarizeOutside(paths []string) string {
+	counts := map[string]int{}
+	var dirs, roots []string
+	for _, p := range paths {
+		dir, _, nested := strings.Cut(p, "/")
+		if !nested {
+			roots = append(roots, p)
+			continue
+		}
+		if counts[dir] == 0 {
+			dirs = append(dirs, dir)
+		}
+		counts[dir]++
+	}
+	sort.Strings(dirs)
+	sort.Strings(roots)
+
+	parts := make([]string, 0, len(dirs)+len(roots))
+	parts = append(parts, roots...)
+	for _, d := range dirs {
+		parts = append(parts, fmt.Sprintf("%s/ (%d)", d, counts[d]))
+	}
+	return strings.Join(parts, ", ")
 }
 
 func plural(n int) string {
