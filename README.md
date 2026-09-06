@@ -105,6 +105,8 @@ rate alone is the wrong number for "how fast is this coming at *me*". See
 
 ## What is implemented
 
+- `CanonicalFuelCode` — folds a fuel code to the table's spelling and says
+  whether the fuel is implemented; see [Fuel codes](#fuel-codes)
 - `RSI` — initial spread rate, all 15 ST-X-3 fuel types, including the M1/M2
   percent-conifer blends and the O1 grass curing factor
 - `BuildupEffect` (BE), `SlopeFactor` (SF), `SlopePercentFromDegrees`
@@ -116,6 +118,37 @@ rate alone is the wrong number for "how fast is this coming at *me*". See
   `AngleBetweenDeg`
 - The crown-fire threshold: `CriticalSurfaceIntensity` (CSI),
   `CriticalSurfaceROS` (RSO), `CrownFractionBurned` (CFB), `DescribeFire` (FD)
+
+## Fuel codes
+
+Implemented: `C1`–`C7`, `D1`, `M1`, `M2`, `S1`–`S3`, `O1A`, `O1B` — the fifteen
+fuel types of ST-X-3. Case and separators do not matter, so `O1a`, `o1b` and
+`C-2` reach the same coefficients as `O1A`, `O1B` and `C2`. The lowercase grass
+spellings are the ones ST-X-3 itself prints, and a raster labelled the way the
+source document labels it must not read as a different fuel.
+
+**M3 and M4 are not implemented.** They are real FBP fuels — the dead-balsam-fir
+mixedwoods from the 2009 revision — and `cffdrs` has both. They need a
+percent-dead-fir input `PDF` that has no home in these signatures. `cffdrs`'s
+non-fuel classes `WA` and `NF` are absent too.
+
+That absence needs a decision from you, because the API cannot make it for you.
+Every function here returns a `float64`, so an unimplemented fuel arrives as a
+spread rate of **0** — which is exactly what a cell that will not carry fire
+returns. An M3 stand is not a cell that will not carry fire. `CanonicalFuelCode`
+is the only thing that tells the two apart:
+
+```go
+code, ok := fbp.CanonicalFuelCode(rasterClass)
+if !ok {
+	// A typo, a non-FBP class name, or M3/M4. Decide here — not downstream,
+	// where it is a zero with no reason attached.
+	return fmt.Errorf("fuel %q is not implemented", rasterClass)
+}
+```
+
+Check it where fuel classes enter, once per class rather than once per cell. The
+already-canonical path does not allocate, so per-cell is affordable too.
 
 ## Crown fire: the threshold, not the inputs
 
@@ -148,6 +181,10 @@ feeding the simplified product here over-predicts crowning by the whole slope
 factor — up to tenfold, straight into an exponential.
 
 ## What is not implemented
+
+**M3 and M4, and the `PDF` input they need.** See [Fuel codes](#fuel-codes) —
+this is the gap most likely to reach a caller as a plausible number, because an
+unimplemented fuel comes back as a spread rate of zero.
 
 **Crown-fire inputs and the per-fuel crown tables.** FMC (from latitude,
 longitude, elevation and date), SFC (from FFMC and BUI per fuel), and the
