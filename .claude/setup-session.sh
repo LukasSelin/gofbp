@@ -2,7 +2,7 @@
 # Session setup for gofbp. Runs before Claude Code launches, on a fresh
 # environment, and its one real job is to make the oracle available.
 #
-# Without testdata/cffdrs.json the fifteen TestCFFDRS* tests skip, and a session
+# Without testdata/cffdrs.json the twelve TestCFFDRS* tests skip, and a session
 # that cannot run them cannot say whether a coefficient is right -- only whether
 # it is self-consistent. Both /migration-check and /migration-port treat that as
 # a precondition and refuse to port through it, so an environment without the
@@ -106,8 +106,12 @@ else
 fi
 
 if command -v go >/dev/null 2>&1; then
-	skipped="$(cd "$REPO" && go test . -run TestCFFDRS -v 2>/dev/null | grep -c '^--- SKIP')"
-	say "TestCFFDRS* skipping: ${skipped:-unknown} of 15"
+	# Count the total rather than hardcoding it: the number of oracle tests grows
+	# with every ported row, and a stale count here would understate the gap.
+	run="$(cd "$REPO" && go test . -run TestCFFDRS -v 2>/dev/null)"
+	skipped="$(printf '%s\n' "$run" | grep -c '^--- SKIP')"
+	total="$(printf '%s\n' "$run" | grep -c '^=== RUN   TestCFFDRS')"
+	say "TestCFFDRS* skipping: ${skipped:-unknown} of ${total:-unknown}"
 fi
 
 say "--------------------------------------------------------------"

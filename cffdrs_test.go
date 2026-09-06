@@ -123,6 +123,8 @@ func closeEnough(got, want, tol float64) bool {
 
 // The buildup effect is a two-coefficient formula per fuel (q and BUI0), so this
 // checks 26 transcribed numbers at once.
+//
+// ledger: buildup_effect.r
 func TestCFFDRSBuildupEffect(t *testing.T) {
 	f := loadCFFDRS(t)
 	const tol = 1e-9
@@ -143,6 +145,8 @@ func TestCFFDRSBuildupEffect(t *testing.T) {
 // SF is one formula (ST-X-3 eq. 39) plus a saturation rule. The fixture brackets
 // 70 % rise from both sides, which is where a wrong cap or a clamp-instead-of-
 // continuous cutoff would show up.
+//
+// ledger: Slopecalc.r
 func TestCFFDRSSlopeFactor(t *testing.T) {
 	f := loadCFFDRS(t)
 	const tol = 1e-9
@@ -177,6 +181,8 @@ func TestCFFDRSSlopeFactor(t *testing.T) {
 // A failure means the moisture constant or one of the two wind branches is wrong;
 // the fixture's rows at WS = 50 are what exercise the second branch (without it
 // the error there reaches 0.242).
+//
+// ledger: initial_spread_index.r
 func TestCFFDRSInitialSpreadIndex(t *testing.T) {
 	f := loadCFFDRS(t)
 	const tol = 1e-12
@@ -217,6 +223,8 @@ func TestCFFDRSInitialSpreadIndex(t *testing.T) {
 //
 // C6 is excluded for the same reason as in TestCFFDRSSurfaceROS: it is the one
 // fuel whose reported ROS is not the surface rate. See crownChangesROS.
+//
+// ledger: Slopecalc.r
 func TestCFFDRSSlopeBackSolve(t *testing.T) {
 	f := loadCFFDRS(t)
 	const tol = 1e-9
@@ -328,6 +336,8 @@ func relErr(got, want float64) float64 {
 // and C6 is the one fuel whose reported ROS carries a crown contribution — see
 // crownChangesROS, which is where the old CFB != 0 exclusion used to be and why
 // it was too broad.
+//
+// ledger: rate_of_spread.r
 func TestCFFDRSSurfaceROS(t *testing.T) {
 	f := loadCFFDRS(t)
 	const tol = 1e-8
@@ -384,6 +394,8 @@ func TestCFFDRSSurfaceROS(t *testing.T) {
 // paired
 // with the flat row at the same fuel/FFMC/BUI/wind, and that row's ISI is the
 // input. Fails only if the fixture stops containing pairable sloped cases.
+//
+// ledger: Slopecalc.r
 func TestCFFDRSSlopeDivergence(t *testing.T) {
 	f := loadCFFDRS(t)
 

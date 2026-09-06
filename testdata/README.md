@@ -46,7 +46,7 @@ so a stale local fixture identifies itself instead of failing obscurely.
 
 ## What happens without it
 
-`go test ./...` passes. Fifteen fixture-backed tests skip with a message pointing
+`go test ./...` passes. Twelve fixture-backed tests skip with a message pointing
 here; everything else — the identities, round-trips, rotational invariance and
 NaN sweeps — runs unconditionally, and is what CI checks on every push.
 
@@ -65,4 +65,16 @@ Both pinned versions are recorded *into* the fixture (`cffdrs_version`,
 drift announces itself rather than silently moving several thousand numbers.
 
 A changed reference number is the oracle telling you something, not noise to be
-committed past. Read the diff.
+committed past. Read the diff — with `tools/fixture-diff`, not with your eyes:
+
+```
+cp testdata/cffdrs.json /tmp/cffdrs.old.json
+./testdata/regen-cffdrs.sh
+go run ./tools/fixture-diff /tmp/cffdrs.old.json testdata/cffdrs.json
+```
+
+It keys cases by their inputs rather than by row order, so a widened sweep is not
+a diff; it reports per column whether anything moved, by how much, and in which
+cases; and it exits non-zero when something did. Adding a column to the generator
+should print `No column shared by both fixtures moved.` — if it prints anything
+else, that is the finding, and it belongs in the PR.

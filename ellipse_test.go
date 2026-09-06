@@ -8,6 +8,8 @@ import (
 
 // LB is two coefficients per fuel FAMILY (one wooded form, one grass form), so
 // this checks the eq. 79/80/81 branch as well as the numbers.
+//
+// ledger: length_to_breadth.r
 func TestCFFDRSLengthToBreadth(t *testing.T) {
 	f := loadCFFDRS(t)
 	const tol = 1e-9
@@ -40,6 +42,8 @@ func TestCFFDRSLengthToBreadth(t *testing.T) {
 // Restricted to flat rows for the same reason TestCFFDRSSurfaceROS is: on sloped
 // ground cffdrs' reported ISI already carries the slope-equivalent wind, and the
 // back-solve is asserted separately.
+//
+// ledger: back_rate_of_spread.r
 func TestCFFDRSBackROS(t *testing.T) {
 	f := loadCFFDRS(t)
 	const tol = 1e-8
@@ -67,6 +71,7 @@ func TestCFFDRSBackROS(t *testing.T) {
 	}
 }
 
+// ledger: flank_rate_of_spread.r
 func TestCFFDRSFlankROS(t *testing.T) {
 	f := loadCFFDRS(t)
 	const tol = 1e-9

@@ -78,20 +78,28 @@ that says the coefficients are *right* rather than merely self-consistent.
 ## Concepts still missing, in dependency order
 
 The 🔴 rows are not independent. Doing them out of order means writing code that
-cannot be oracle-tested yet:
+cannot be oracle-tested yet.
 
-1. **SFC** — unlocks TFC, then HFI, and makes `Crown` usable without the caller
-   supplying `SFC` by hand.
-2. **FMC** (against 1.10.0, including `D0`) — the other `Crown` input a caller
-   currently has to invent.
-3. **CBH / CFL defaults** — per-fuel tables; small, and the last thing standing
-   between `Crown` and a fuel-code-only call.
-4. **C6 RSC** — removes the exclusion that every oracle test currently carries.
-   Do not attempt before CBH/CFL land; C6's ROS *is* the CFB blend.
-5. **TFC, HFI** — mechanical once SFC exists.
-6. **Acceleration model** — the largest remaining block, and the only one that
-   changes the package's shape (it introduces time).
-7. **An `fbp()`-shaped driver** — last, or never. See the row above.
+Each item names the upstream file its row is keyed on, because `TestLedger…` in
+`ledger_test.go` joins this list to the table above on exactly that name — every
+🔴 row has to appear here, and nothing may appear here that is not still owed.
+
+1. **SFC** (`surface_fuel_consumption.r`) — unlocks TFC, then HFI, and makes
+   `Crown` usable without the caller supplying `SFC` by hand.
+2. **FMC** (`foliar_moisture_content.r`, against 1.10.0 and including `D0`) — the
+   other `Crown` input a caller currently has to invent.
+3. **CBH / CFL defaults** (`crown_base_height.r`, `crown_fuel_load.r`) — per-fuel
+   tables; small, and the last thing standing between `Crown` and a
+   fuel-code-only call.
+4. **C6 RSC** (`C6calc.r`) — removes the exclusion that every oracle test
+   currently carries. Do not attempt before CBH/CFL land; C6's ROS *is* the CFB
+   blend.
+5. **TFC, HFI** (`total_fuel_consumption.r`, `fire_intensity.r`) — mechanical
+   once SFC exists.
+6. **Acceleration model** (`rate_of_spread_at_time.r`, `distance_at_time.r`,
+   `length_to_breadth_at_time.r`) — the largest remaining block, and the only one
+   that changes the package's shape (it introduces time).
+7. **An `fbp()`-shaped driver** (`fbp.r`) — last, or never. See the row above.
 
 ## Log
 

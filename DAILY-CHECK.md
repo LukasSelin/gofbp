@@ -18,7 +18,7 @@ is right. Only the fixture can tell them apart.
 
 - [ ] `git fetch && git status` — clean tree, know what branch you are on.
 - [ ] `go test ./...` — green before you touch anything. If it is red, stop; today's job is that.
-- [ ] Note how many `TestCFFDRS*` tests **skipped**. All fifteen skipping means you have no fixture, so nothing you conclude today about coefficients is backed by anything.
+- [ ] Note how many `TestCFFDRS*` tests **skipped**. All twelve skipping means you have no fixture, so nothing you conclude today about coefficients is backed by anything.
 
 ## 2. Upstream drift (3 min)
 
@@ -38,20 +38,35 @@ Against <https://github.com/cffdrs/cffdrs_r>:
 - [ ] Bump `CFFDRS_VERSION` in `testdata/Dockerfile`.
 - [ ] `./testdata/regen-cffdrs.sh`
 - [ ] `go test . -run TestCFFDRS`
-- [ ] **Read the diff in the reference numbers.** A changed oracle number is the reference implementation telling you something. It is never noise, and it is never something to commit past.
+- [ ] **Read the diff in the reference numbers.** Keep the old fixture and let `tools/fixture-diff` read it for you — 18400 cases is not something eyes check:
+
+  ```
+  cp testdata/cffdrs.json /tmp/cffdrs.old.json
+  ./testdata/regen-cffdrs.sh
+  go run ./tools/fixture-diff /tmp/cffdrs.old.json testdata/cffdrs.json
+  ```
+
+  It exits non-zero if any column shared by both fixtures moved, and names the column, the worst cases and the size of the move. A changed oracle number is the reference implementation telling you something. It is never noise, and it is never something to commit past.
 - [ ] Record the new fixture sha256 in `testdata/README.md`, keeping the previous digest, so a stale local fixture identifies itself instead of failing obscurely.
 - [ ] Say in the PR what the reference numbers did and why.
 
 ## 4. Ledger sweep (3 min)
 
-Walk `MIGRATION.md` top to bottom:
+The mechanical half of this sweep is `ledger_test.go`, and `go test ./...` in step
+1 already ran it. It joins the ledger to the test files and to the pinned
+toolchain, and it fails — with the row and the line number — on a ✅ row whose
+`TestCFFDRS*` is gone, a 🔴 row missing from the dependency order, a Go file no
+row names, a pin copied to one place and not the others, and a Log that skipped a
+day. Do not re-check those by hand; a green run is a better answer than a reading.
 
-- [ ] Every ✅ row: does a `TestCFFDRS*` still assert it? A row that quietly lost its oracle coverage is worse than one that never had it — it is a false claim.
-- [ ] Every 🟢 row: is there still genuinely no upstream column to assert against, or did upstream start returning one?
+What is left is the half that is judgement, and it still needs walking
+`MIGRATION.md` top to bottom:
+
+- [ ] Every 🟢 row: is there still genuinely no upstream column to assert against, or did upstream start returning one? The test cannot know this — only the upstream diff can.
 - [ ] Every 🟡 row: is the note still an accurate description of the gap?
-- [ ] Every 🔴 row: still blocked by what the dependency order says, or did its blocker clear?
-- [ ] Every ⚪ row: the reason is the row's whole content. If you cannot restate the reason in a sentence, it is not out of scope — it is unported.
-- [ ] Any Go file added or changed since yesterday: is it in the ledger at all?
+- [ ] Every 🔴 row: still blocked by what the dependency order says, or did its blocker clear? The test checks the row is *listed*; whether the order is still right is yours.
+- [ ] Every ⚪ row: the reason is the row's whole content. The test checks there is one; you are checking it is still true.
+- [ ] Every exclusion in a `TestCFFDRS*`: is its reason still a mechanism rather than a symptom? See `crownChangesROS`.
 
 ## 5. Move one thing (the rest of the day)
 
