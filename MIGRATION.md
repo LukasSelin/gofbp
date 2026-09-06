@@ -18,7 +18,7 @@ that says the coefficients are *right* rather than merely self-consistent.
 | Upstream commit last read | `4d20a30` (2026-05-11) | 2026-09-06 |
 | Upstream package version | 1.10.0 | 2026-09-06 |
 | Oracle pins (`testdata/Dockerfile`) | cffdrs 1.9.2, R 4.6.1 | 2026-09-06 |
-| Fixture sha256 | `12b9a009…89a7f` (`testdata/README.md`) | 2026-09-06 |
+| Fixture sha256 | `148a5a9e…4cf8f` (`testdata/README.md`) | 2026-09-06 |
 
 > **Open drift:** the oracle pins 1.9.2, upstream is 1.10.0. `4d20a30` changes
 > foliar moisture content handling and adds `D0` to `fbp()`'s output. gofbp does
@@ -71,7 +71,7 @@ that says the coefficients are *right* rather than merely self-consistent.
 | Upstream | Status | Note |
 |---|---|---|
 | `data/` | 🟡 | Fuel-type tables. gofbp transcribed the ST-X-3 tables by hand and checks them against the fixture. The CBH/CFL defaults living here are the 🔴 rows above. |
-| `tests/` | 🟡 | Not mirrored. gofbp asserts against a generated ~18400-case sweep instead (`testdata/gen_cffdrs_reference.R`). Upstream's own test cases are still worth reading for edge cases the sweep does not reach. |
+| `tests/` | 🟡 | Not mirrored. gofbp asserts against a generated 23,532-case sweep instead (`testdata/gen_cffdrs_reference.R`). Upstream's own test cases are still worth reading for edge cases the sweep does not reach. |
 | `man/`, `inst/` | ⚪ | Docs and package metadata. |
 | `NEWS.md` | — | **Read on every version bump.** It is the cheapest signal that a coefficient moved. |
 
@@ -108,4 +108,4 @@ gap in the dates is visible as a gap.
 
 | Date | Upstream commit | What changed |
 |---|---|---|
-| 2026-09-06 | `4d20a30` | Ledger created. Full `R/` inventory taken against upstream 1.10.0; oracle-vs-upstream version drift recorded as an open item. |
+| 2026-09-06 | `4d20a30` | Ledger created. Full `R/` inventory taken against upstream 1.10.0; oracle-vs-upstream version drift recorded as an open item. Fixture digest re-baselined to `148a5a9e…`: `8b0cf01` grew the sweep to 23,532 cases and never re-recorded it. Verified with `tools/fixture-diff` against a rebuilt pre-M3/M4 fixture — no reference number moved. |

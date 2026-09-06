@@ -68,7 +68,7 @@ is right. Only the fixture can tell them apart.
 - [ ] Bump `CFFDRS_VERSION` in `testdata/Dockerfile`.
 - [ ] `./testdata/regen-cffdrs.sh`
 - [ ] `go test . -run TestCFFDRS`
-- [ ] **Read the diff in the reference numbers.** Keep the old fixture and let `tools/fixture-diff` read it for you — 18400 cases is not something eyes check:
+- [ ] **Read the diff in the reference numbers.** Keep the old fixture and let `tools/fixture-diff` read it for you — 23,532 cases is not something eyes check:
 
   ```
   cp testdata/cffdrs.json /tmp/cffdrs.old.json

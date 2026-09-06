@@ -84,6 +84,8 @@ type report struct {
 	OnlyInNew    int       `json:"only_in_new"`
 	AmbiguousOld int       `json:"ambiguous_old"`
 	AmbiguousNew int       `json:"ambiguous_new"`
+	DuplicateOld int       `json:"duplicate_old"`
+	DuplicateNew int       `json:"duplicate_new"`
 	KeyCols      []string  `json:"key_cols"`
 	Columns      []colStat `json:"columns"`
 	Moved        []string  `json:"moved"`
@@ -165,21 +167,45 @@ func (f *fixture) columns() map[string]bool {
 	return cols
 }
 
-// index keys every case by its input columns. The second return is the number of
-// cases whose key was already taken, which means the key columns no longer
-// identify a case and every comparison below is untrustworthy.
-func (f *fixture) index(keyCols []string) (map[string]map[string]any, int) {
-	idx := make(map[string]map[string]any, len(f.Cases))
-	dupes := 0
+// index keys every case by its input columns and reports what collided.
+//
+// Two cases sharing a key are one of two very different things, and conflating
+// them cost a real investigation once. If their OTHER columns agree, the sweep
+// simply emits a row twice — the generator's slope block repeats the flat block
+// at gs = 0 — which is harmless here, because dropping a row identical to the one
+// kept cannot change a verdict. If they DISAGREE, the key no longer identifies a
+// case: some input the sweep varies is missing from inputCols, and every
+// comparison below is untrustworthy.
+func (f *fixture) index(keyCols []string) (idx map[string]map[string]any, identical, conflicting int) {
+	idx = make(map[string]map[string]any, len(f.Cases))
 	for _, c := range f.Cases {
 		k := caseKey(c, keyCols)
-		if _, seen := idx[k]; seen {
-			dupes++
+		kept, seen := idx[k]
+		if !seen {
+			idx[k] = c
 			continue
 		}
-		idx[k] = c
+		if sameCase(kept, c) {
+			identical++
+		} else {
+			conflicting++
+		}
 	}
-	return idx, dupes
+	return idx, identical, conflicting
+}
+
+// sameCase reports whether two cases agree on every column either one has.
+func sameCase(a, b map[string]any) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, av := range a {
+		bv, ok := b[k]
+		if !ok || format(av) != format(bv) {
+			return false
+		}
+	}
+	return true
 }
 
 func caseKey(c map[string]any, keyCols []string) string {
@@ -226,8 +252,8 @@ func compare(oldFx, newFx *fixture, tol float64, maxExamples int) *report {
 		}
 	}
 
-	oldIdx, oldDupes := oldFx.index(keyCols)
-	newIdx, newDupes := newFx.index(keyCols)
+	oldIdx, oldDupes, oldConflicts := oldFx.index(keyCols)
+	newIdx, newDupes, newConflicts := newFx.index(keyCols)
 
 	shared := make([]string, 0, len(oldIdx))
 	onlyOld := 0
@@ -251,7 +277,8 @@ func compare(oldFx, newFx *fixture, tol float64, maxExamples int) *report {
 		OldVersions: oldFx.versions(), NewVersions: newFx.versions(),
 		OldCases: len(oldFx.Cases), NewCases: len(newFx.Cases),
 		SharedCases: len(shared), OnlyInOld: onlyOld, OnlyInNew: onlyNew,
-		AmbiguousOld: oldDupes, AmbiguousNew: newDupes,
+		AmbiguousOld: oldConflicts, AmbiguousNew: newConflicts,
+		DuplicateOld: oldDupes, DuplicateNew: newDupes,
 		KeyCols: keyCols,
 	}
 
@@ -368,10 +395,15 @@ func printReport(w io.Writer, rep *report) {
 	}
 	p("\nkeyed on %s\n", strings.Join(rep.KeyCols, ", "))
 	p("shared %d, only in old %d, only in new %d\n", rep.SharedCases, rep.OnlyInOld, rep.OnlyInNew)
+	if rep.DuplicateOld > 0 || rep.DuplicateNew > 0 {
+		p("\nredundant rows: %d old, %d new — same inputs AND same outputs as a row already\n"+
+			"counted, so they change nothing here. The sweep emits those cases twice.\n",
+			rep.DuplicateOld, rep.DuplicateNew)
+	}
 	if rep.AmbiguousOld > 0 || rep.AmbiguousNew > 0 {
-		p("\n!! %d old and %d new cases share a key with another case. The input columns\n"+
-			"!! no longer identify a case, so the per-column verdicts below are not\n"+
-			"!! trustworthy — a new input column probably needs adding to inputCols.\n",
+		p("\n!! %d old and %d new cases share a key with a row they DISAGREE with. The input\n"+
+			"!! columns no longer identify a case, so the per-column verdicts below are not\n"+
+			"!! trustworthy — an input the sweep varies is missing from inputCols.\n",
 			rep.AmbiguousOld, rep.AmbiguousNew)
 	}
 

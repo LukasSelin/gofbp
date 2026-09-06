@@ -61,7 +61,7 @@ the date. Then:
   otherwise on a new `migration-check/<date>` branch. Message: what the audit
   found, in the repo's own voice.
 - **Do not push, open a PR, dispatch a workflow, or bump `CFFDRS_VERSION` in
-  `testdata/Dockerfile` on your own.** A version bump means regenerating a 9.5 MB
+  `testdata/Dockerfile` on your own.** A version bump means regenerating a 10.9 MB
   fixture and reading a diff in the reference numbers; that is a reviewed step,
   not a scheduled one. Report that it is needed and stop.
 

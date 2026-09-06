@@ -188,6 +188,10 @@ func TestUnknownInputColumnIsReportedAsAmbiguousKeys(t *testing.T) {
 	if rep.AmbiguousOld == 0 || rep.AmbiguousNew == 0 {
 		t.Fatalf("ambiguous keys not reported: old=%d new=%d", rep.AmbiguousOld, rep.AmbiguousNew)
 	}
+	if rep.DuplicateOld != 0 || rep.DuplicateNew != 0 {
+		t.Errorf("conflicting rows were miscounted as harmless duplicates: %d/%d",
+			rep.DuplicateOld, rep.DuplicateNew)
+	}
 	var sb strings.Builder
 	printReport(&sb, rep)
 	if !strings.Contains(sb.String(), "inputCols") {
@@ -203,5 +207,39 @@ func TestReportNamesTheVersionDriftWhenOracleVersionsDiffer(t *testing.T) {
 	printReport(&sb, compare(oldFx, newFx, 0, 3))
 	if !strings.Contains(sb.String(), "oracle versions differ") {
 		t.Errorf("a version bump was not called out:\n%s", sb.String())
+	}
+}
+
+// The real sweep emits some cases twice: its slope block repeats the flat block at
+// gs = 0. Those rows agree with their twin in every column, so dropping one cannot
+// change a verdict — and calling that "the verdicts are not trustworthy", as this
+// first did, sends the reader off to investigate a non-problem in the middle of
+// the one comparison the repo most needs to believe.
+func TestIdenticalDuplicateRowsAreHarmlessNotAmbiguous(t *testing.T) {
+	dup := kase("C2", 90, 40, map[string]any{"ros": 5.0, "isi": 12.0})
+	other := kase("C3", 90, 40, map[string]any{"ros": 7.0, "isi": 12.0})
+	oldFx := mk("old", "1.9.2", dup, other, dup)
+	newFx := mk("new", "1.9.2", dup, other, dup)
+
+	rep := compare(oldFx, newFx, 0, 3)
+
+	if rep.DuplicateOld != 1 || rep.DuplicateNew != 1 {
+		t.Errorf("duplicates = %d/%d, want 1/1", rep.DuplicateOld, rep.DuplicateNew)
+	}
+	if rep.AmbiguousOld != 0 || rep.AmbiguousNew != 0 {
+		t.Errorf("identical rows were reported as conflicting: %d/%d", rep.AmbiguousOld, rep.AmbiguousNew)
+	}
+	if len(rep.Moved) != 0 {
+		t.Errorf("moved = %v, want none", rep.Moved)
+	}
+
+	var sb strings.Builder
+	printReport(&sb, rep)
+	out := sb.String()
+	if !strings.Contains(out, "redundant rows") {
+		t.Errorf("duplicates not reported at all:\n%s", out)
+	}
+	if strings.Contains(out, "not\ntrustworthy") || strings.Contains(out, "DISAGREE") {
+		t.Errorf("harmless duplicates raised the untrustworthy alarm:\n%s", out)
 	}
 }
