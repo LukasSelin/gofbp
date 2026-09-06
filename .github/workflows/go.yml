@@ -26,3 +26,29 @@ jobs:
 
     - name: Test
       run: go test -v ./...
+
+    # What a caller links in when they import this package. gofbp is arithmetic
+    # on floats: no files, no network, no exec, no reflection, no cgo. That is
+    # not a baseline to be re-recorded when it moves — it is the invariant, and
+    # the empty set below is the whole expected value.
+    #
+    # Deliberately not a checked-in capabilities.json. A baseline file is the
+    # thing someone regenerates to make CI green; an empty set written here can
+    # only be widened by editing this workflow, in the diff, on purpose.
+    #
+    # It earns a step because the failure is quiet. Reaching for os.Getenv to
+    # read a fuel table, or a logging package that opens a file, breaks no test
+    # at all; it changes what every consumer is trusting, and it does not look
+    # like anything in a diff full of coefficients.
+    #
+    # Pinned, not @latest: Capslock ships new capability mappings between
+    # releases, so an unpinned tool can turn an unchanged package red on a day
+    # nobody touched it.
+    #
+    # Test files are out of scope. The fixture tests read testdata and shell out
+    # to Docker, which is fine, and is not what a consumer links.
+    - name: Check the package still has no capabilities
+      run: |
+        go install github.com/google/capslock/cmd/capslock@v0.3.3
+        echo '{}' > "$RUNNER_TEMP/no-capabilities.json"
+        capslock -packages=./... -output=compare "$RUNNER_TEMP/no-capabilities.json"
