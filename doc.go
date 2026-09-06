@@ -87,9 +87,9 @@
 // The error is entirely a wind-DIRECTION effect, because RSI · BE · SF applies
 // the full slope factor no matter which way the wind blows:
 //
-//	wind driving upslope   median 1.24x, p95 5.91x, worst 6.54x
-//	wind cross-slope       median 1.85x, p95 5.95x, worst 7.25x
-//	wind opposing slope    median 2.98x, p95 74x,   worst 99x
+//	wind driving upslope   median 1.28x, p95 5.91x, worst 7.61x
+//	wind cross-slope       median 2.02x, p95 5.95x, worst 7.77x
+//	wind opposing slope    median 3.29x, p95 67x,   worst 99x
 //
 // At zero wind the two usually agree exactly — with nothing to vector-add, the
 // back-solve is an identity. Two exceptions, and neither is exotic: mixedwood

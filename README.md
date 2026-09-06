@@ -235,9 +235,9 @@ ground is an **upper bound, never an under-estimate**:
 
 | wind vs. slope | median | p95 | worst |
 |---|---|---|---|
-| driving upslope | 1.24x | 5.91x | 6.54x |
-| cross-slope | 1.85x | 5.95x | 7.25x |
-| opposing slope | 2.98x | 74x | 99x |
+| driving upslope | 1.28x | 5.91x | 7.61x |
+| cross-slope | 2.02x | 5.95x | 7.77x |
+| opposing slope | 3.29x | 67x | 99x |
 
 Note the upslope row: even with the wind helping, `ROS` is not a safe stand-in on
 steep dry ground.

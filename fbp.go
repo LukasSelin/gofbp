@@ -70,11 +70,9 @@ const maxFuelCodeLen = 8
 // input land there, and both are ordinary:
 //
 //   - A typo, or a fuel column from a source whose class names are not FBP's.
-//   - M3 and M4, the dead-balsam-fir mixedwoods. They are real FBP fuels
-//     (Wotton, Alexander & Taylor 2009, eqs. 29-33) and cffdrs implements both;
-//     this package does not, because their percent-dead-fir input PDF has no
-//     home in these signatures. A stand that maps to M3 is not a stand that
-//     does not burn.
+//   - D2, and cffdrs' non-fuel classes WA and NF. D2 is a real fuel in the
+//     published system that this package has no coefficients for, so a stand
+//     mapping to it is not a stand that does not burn.
 //
 // Call this at the boundary where fuel codes enter — once per class, not once
 // per cell — and decide there what an unimplemented fuel means for your output.
@@ -242,7 +240,7 @@ func SlopeFactor(slopePct float64) float64 {
 //
 // This is NOT the published slope path. Slope enters here as a multiplier, so it
 // applies whole regardless of wind direction, and the result is an upper bound
-// wherever wind is not blowing uphill (median 2.98x, worst 99x with wind opposing
+// wherever wind is not blowing uphill (median 3.29x, worst 99x with wind opposing
 // the slope; see the package doc and TestCFFDRSSlopeDivergence). It never
 // under-estimates.
 //
