@@ -45,8 +45,14 @@ WS_VALUES <- c(0, 5, 15, 30, 50)
 BUI_VALUES <- c(1, 20, 40, 64, 100, 150)
 # Slope in PERCENT rise, bracketing the 70% saturation from both sides.
 GS_VALUES <- c(0, 5, 15, 30, 45, 60, 69.9, 70, 100, 200)
-PC_VALUES <- c(0, 25, 50, 75, 100)   # mixedwood conifer share
-PDF_VALUES <- c(0, 35, 100)          # M2 dead fir share
+PC_VALUES <- c(0, 25, 50, 75, 100)   # M1/M2 conifer share
+# M3/M4 dead balsam fir share. This is a DIFFERENT input from PC, weighting a
+# different pair of curves (eqs. 29/33 against eq. 27), and it reaches only M3
+# and M4 -- cffdrs' M2 is weighted by PC, not PDF, despite its name. The
+# endpoints are both here because they are where the blend collapses to
+# something nameable: at 100 to the fuel's own eq. 30 curve, at 0 to D1 alone
+# (times 0.2 for M4).
+PDF_VALUES <- c(0, 25, 35, 60, 100)
 CC_VALUES <- c(20, 50, 80, 100)      # grass curing
 # Crown-fire threshold sweeps. CBH is metres to the base of the crown and LAT/Dj
 # are how foliar moisture content is reached -- FMC is a function of latitude,
@@ -66,7 +72,12 @@ DJ_VALUES <- c(150, 175, 200, 240)
 
 CONIFER <- c("C1", "C2", "C3", "C4", "C5", "C6", "C7")
 SIMPLE <- c(CONIFER, "D1", "S1", "S2", "S3")
-MIXED <- c("M1", "M2")
+# The two mixedwood families are swept separately because they take different
+# blend inputs. Sweeping both inputs over both families would quadruple the block
+# to buy nothing: PDF does not reach M1/M2 and PC does not reach M3/M4, so the
+# extra rows would be exact duplicates of rows already here.
+MIXED_PC <- c("M1", "M2")
+MIXED_PDF <- c("M3", "M4")
 GRASS <- c("O1a", "O1b")
 
 # fbp() wants every column present for every row, so unused ones get harmless
@@ -100,10 +111,17 @@ for (fuel in SIMPLE) {
     add(base_row(fuel, ffmc, bui, ws, 0))
   }
 }
-for (fuel in MIXED) {
+for (fuel in MIXED_PC) {
   for (ffmc in FFMC_VALUES) for (ws in WS_VALUES) for (bui in BUI_VALUES) {
-    for (pc in PC_VALUES) for (pdf in if (fuel == "M2") PDF_VALUES else 35) {
-      add(base_row(fuel, ffmc, bui, ws, 0, pc = pc, pdf = pdf))
+    for (pc in PC_VALUES) {
+      add(base_row(fuel, ffmc, bui, ws, 0, pc = pc))
+    }
+  }
+}
+for (fuel in MIXED_PDF) {
+  for (ffmc in FFMC_VALUES) for (ws in WS_VALUES) for (bui in BUI_VALUES) {
+    for (pdf in PDF_VALUES) {
+      add(base_row(fuel, ffmc, bui, ws, 0, pdf = pdf))
     }
   }
 }
@@ -139,7 +157,16 @@ for (fuel in GRASS) {
 # is 38.7 km/h, just under fbp.HighWindKmh. FFMC 95 crosses it, and also reaches
 # both fbp.EquivalentWindCapKmh and the isfClampMin guard -- three branches that
 # are otherwise transcribed but never checked against the oracle.
-for (fuel in c("C2", "C3", "D1", "S1", "O1b", "M1", "M2")) {
+#
+# M3/M4 are here for eqs. 42b/42c, which are eq. 42's construction with the
+# fuel's own eq. 30 curve in C2's place. cffdrs reaches that pure component by
+# calling its own rate_of_spread with PDF forced to 100, and it drops M4's 0.2
+# deciduous weighting in the slope path exactly as it drops M2's -- two readings
+# taken off the R source rather than measured, and TestCFFDRSSlopeBackSolve is
+# what turns them into assertions. PDF stays at base_row's 35 here: the weight
+# only has to be non-degenerate to pin the blend, and sweeping it would multiply
+# this block, which is already the largest one.
+for (fuel in c("C2", "C3", "D1", "S1", "O1b", "M1", "M2", "M3", "M4")) {
   for (ffmc in c(85, 95)) {
     for (gs in GS_VALUES) for (ws in c(0, 5, 15, 30)) for (wd in c(0, 90, 180, 270)) {
       for (bui in c(40, 100)) {
@@ -153,9 +180,16 @@ for (fuel in c("C2", "C3", "D1", "S1", "O1b", "M1", "M2")) {
 
 # Crown-fire threshold. A block of its own rather than more columns on the sweeps
 # above, for two reasons: it keeps the growth bounded (this is ~9200 rows against
-# the ~11500 that were here before), and it leaves every existing test's case
-# count untouched, so a regeneration that changes one of them is a real signal
-# rather than a side effect of this addition.
+# the ~11500 that were here before), and it left every then-existing test's case
+# count untouched, so a regeneration that changed one of them was a real signal
+# rather than a side effect of that addition.
+#
+# NOTE: adding M3/M4 DID move those counts, deliberately and everywhere -- two
+# new fuels in the flat, sloped and crown blocks, PDF_VALUES widened from 3
+# values to 5, and M2's pointless PDF sweep dropped (PDF does not reach M2). A
+# regeneration across that change is expected to renumber every block. It is the
+# one commit where a changed count is not a signal; after it, the rule above
+# applies again.
 #
 # What has to VARY, and why each one is here:
 #
@@ -184,7 +218,8 @@ for (fuel in c("C2", "C3", "D1", "S1", "O1b", "M1", "M2")) {
 # whose ROS depends on CFB, through a separate crown rate of spread this package
 # does not implement, so its cfb and ros columns are a different quantity. The Go
 # side excludes it by name and says so.
-for (fuel in c("C1", "C2", "C3", "C4", "C5", "C6", "C7", "D1", "M1", "M2", "S1", "O1b")) {
+for (fuel in c("C1", "C2", "C3", "C4", "C5", "C6", "C7", "D1",
+               "M1", "M2", "M3", "M4", "S1", "O1b")) {
   for (ffmc in c(85, 92, 95)) for (bui in c(40, 100)) {
     for (ws in c(0, 30)) for (gs in c(0, 30)) {
       for (cbh in CBH_VALUES) for (lat in LAT_VALUES) for (dj in DJ_VALUES) {

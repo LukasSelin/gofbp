@@ -27,11 +27,12 @@ func TestCanonicalFuelCodeFoldsSpelling(t *testing.T) {
 		{"o1a", "O1A", true},
 		{"O-1a", "O1A", true},
 		{"m1", "M1", true},
+		{"M3", "M3", true},
+		{"m4", "M4", true},
+		{"m-4", "M4", true},
 		// Real FBP fuels this package does not implement. They must fold to a
 		// clean canonical spelling and still report false: a caller logging the
-		// rejection wants to see "M3", not the raw input.
-		{"M3", "M3", false},
-		{"m4", "M4", false},
+		// rejection wants to see "D2", not the raw input.
 		{"D2", "D2", false},
 		// cffdrs' non-fuel classes.
 		{"WA", "WA", false},
@@ -77,6 +78,7 @@ func TestSpellingDoesNotChangeAnyAnswer(t *testing.T) {
 		isi = 12.0
 		bui = 60.0
 		pc  = 50.0
+		pdf = 35.0
 		cc  = 90.0
 	)
 	for _, spellings := range [][]string{
@@ -84,11 +86,13 @@ func TestSpellingDoesNotChangeAnyAnswer(t *testing.T) {
 		{"O1A", "O1a", "o1a", "O-1a"},
 		{"O1B", "O1b", "o1b"},
 		{"M1", "m1"},
+		{"M3", "m3", "M-3"},
+		{"M4", "m4"},
 		{"S3", "s3"},
 	} {
 		want := spellings[0]
 		for _, got := range spellings[1:] {
-			if a, b := RSI(want, isi, pc, cc), RSI(got, isi, pc, cc); a != b {
+			if a, b := RSI(want, isi, pc, pdf, cc), RSI(got, isi, pc, pdf, cc); a != b {
 				t.Errorf("RSI: %q gave %v, %q gave %v", want, a, got, b)
 			}
 			if a, b := BuildupEffect(want, bui), BuildupEffect(got, bui); a != b {
@@ -97,13 +101,14 @@ func TestSpellingDoesNotChangeAnyAnswer(t *testing.T) {
 			if a, b := LengthToBreadth(want, 25), LengthToBreadth(got, 25); a != b {
 				t.Errorf("LengthToBreadth: %q gave %v, %q gave %v", want, a, got, b)
 			}
-			if a, b := ROS(want, isi, bui, pc, cc, 30), ROS(got, isi, bui, pc, cc, 30); a != b {
+			if a, b := ROS(want, isi, bui, pc, pdf, cc, 30), ROS(got, isi, bui, pc, pdf, cc, 30); a != b {
 				t.Errorf("ROS: %q gave %v, %q gave %v", want, a, got, b)
 			}
 			sw := func(code string) SlopeWind {
 				return SlopeWind{
 					Code: code, FFMC: 92, SlopePct: 30, WindKmh: 15,
-					WindAzimuthDeg: 45, UpslopeAzimuthDeg: 90, PC: pc, CuringPct: cc,
+					WindAzimuthDeg: 45, UpslopeAzimuthDeg: 90,
+					PC: pc, PDF: pdf, CuringPct: cc,
 				}
 			}
 			if a, b := EquivalentWind(sw(want)), EquivalentWind(sw(got)); a != b {
@@ -126,7 +131,7 @@ func TestSpellingDoesNotChangeAnyAnswer(t *testing.T) {
 func TestGrassSpellingReachesTheGrassBranch(t *testing.T) {
 	// Curing must bite: the grass RSI is scaled by CuringFactor, so two curing
 	// levels cannot give the same answer.
-	dry, damp := RSI("O1a", 12, 0, 100), RSI("O1a", 12, 0, 30)
+	dry, damp := RSI("O1a", 12, 0, 0, 100), RSI("O1a", 12, 0, 0, 30)
 	if !(dry > damp) {
 		t.Errorf("RSI(O1a) at 100%% curing = %v, at 30%% = %v; curing did not apply", dry, damp)
 	}
@@ -142,16 +147,21 @@ func TestGrassSpellingReachesTheGrassBranch(t *testing.T) {
 //
 // The numbers cannot carry this. Every function here returns a float64, so a
 // fuel this package does not implement can only arrive as 0 m/min, which is also
-// what a cell that will not carry fire returns — and M3/M4 are real FBP fuels
-// that cffdrs implements, so the input is not even a mistake. CanonicalFuelCode
-// is the only thing in the API that can tell the caller which of the two it is
-// looking at, and this asserts it does.
+// what a cell that will not carry fire returns. CanonicalFuelCode is the only
+// thing in the API that can tell the caller which of the two it is looking at,
+// and this asserts it does.
+//
+// M3 and M4 were the motivating case and are now implemented, which is why they
+// are absent from the list below and present in the fold table above. D2 is the
+// remaining one of the same kind: a real fuel in the published system that this
+// package has no coefficients for. Move a code out of here when it gains an
+// entry in Fuels, never to make a failure go away.
 func TestUnimplementedFuelIsReportedRatherThanInferred(t *testing.T) {
-	for _, code := range []string{"M3", "M4", "D2", "WA", "NF", "nonsense", ""} {
+	for _, code := range []string{"D2", "WA", "NF", "nonsense", ""} {
 		if _, known := CanonicalFuelCode(code); known {
 			t.Errorf("CanonicalFuelCode(%q) reports known; this package has no coefficients for it", code)
 		}
-		if got := RSI(code, 12, 50, 90); got != 0 {
+		if got := RSI(code, 12, 50, 35, 90); got != 0 {
 			t.Errorf("RSI(%q) = %v, want 0", code, got)
 		}
 	}
@@ -160,7 +170,7 @@ func TestUnimplementedFuelIsReportedRatherThanInferred(t *testing.T) {
 	if _, known := CanonicalFuelCode("D1"); !known {
 		t.Fatal("CanonicalFuelCode(D1) reports unknown")
 	}
-	if got := RSI("D1", 0, 0, 0); got != 0 {
+	if got := RSI("D1", 0, 0, 0, 0); got != 0 {
 		t.Errorf("RSI(D1) at ISI 0 = %v, want 0", got)
 	}
 }

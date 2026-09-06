@@ -29,26 +29,33 @@
 //
 // # Fuel codes
 //
-// Implemented: C1-C7, D1, M1, M2, S1-S3, O1A and O1B — the fifteen fuel types of
-// ST-X-3. Codes are folded by CanonicalFuelCode, so case and separators do not
-// matter: "O1a", "o1b" and "C-2" reach the same coefficients as "O1A", "O1B" and
-// "C2". The lowercase grass spellings are the ones ST-X-3 itself prints, and a
-// raster labelled the way the source document labels it must not read as a
-// different fuel from one labelled the way Fuels is keyed.
+// Implemented: C1-C7, D1, M1-M4, S1-S3, O1A and O1B — the fifteen fuel types of
+// ST-X-3 plus M3 and M4, the dead-balsam-fir mixedwoods from Wotton, Alexander &
+// Taylor (2009). That is every fuel cffdrs implements. Codes are folded by
+// CanonicalFuelCode, so case and separators do not matter: "O1a", "o1b" and
+// "C-2" reach the same coefficients as "O1A", "O1B" and "C2". The lowercase
+// grass spellings are the ones ST-X-3 itself prints, and a raster labelled the
+// way the source document labels it must not read as a different fuel from one
+// labelled the way Fuels is keyed.
 //
-// NOT implemented: M3 and M4, the dead-balsam-fir mixedwoods added in Wotton,
-// Alexander & Taylor (2009, eqs. 29-33). cffdrs has both; they need a
-// percent-dead-fir input PDF that has no home in these signatures, and adding
-// one is a change to every fuel's call site rather than a new table row. Also
-// absent are cffdrs' non-fuel classes WA and NF.
+// The mixedwoods take two different blend inputs and they are not
+// interchangeable. M1/M2 are weighted by percent conifer PC (eq. 27, against the
+// C2 curve); M3/M4 by percent dead balsam fir PDF (eqs. 29/33, against the
+// fuel's own eq. 30 curve). Both are "how much of this stand is the flammable
+// component" and both are percentages, which is exactly why they are separate
+// parameters here — a fuel map carrying both carries them in different columns,
+// and one parameter serving both would turn a transposed column into a plausible
+// number instead of a compile error.
+//
+// NOT implemented: D2, and cffdrs' non-fuel classes WA and NF.
 //
 // That absence needs an active decision from the caller, because the API cannot
 // make it. Every function here takes a fuel code and returns a float64, so an
 // unimplemented fuel comes back as a spread rate of 0 — indistinguishable from a
-// cell that genuinely will not carry fire, and an M3 stand is not that. Screen
-// fuel codes with CanonicalFuelCode where classes enter, once per class rather
-// than once per cell, and decide there what an unimplemented fuel means for the
-// output. Left to the numbers, the answer is 0 and the reason is gone.
+// cell that genuinely will not carry fire. Screen fuel codes with
+// CanonicalFuelCode where classes enter, once per class rather than once per
+// cell, and decide there what an unimplemented fuel means for the output. Left
+// to the numbers, the answer is 0 and the reason is gone.
 //
 // # Scope
 //
@@ -80,13 +87,13 @@
 // The error is entirely a wind-DIRECTION effect, because RSI · BE · SF applies
 // the full slope factor no matter which way the wind blows:
 //
-//	wind driving upslope   median 1.24x, p95 5.91x, worst 6.54x
-//	wind cross-slope       median 1.85x, p95 5.95x, worst 7.25x
-//	wind opposing slope    median 2.98x, p95 74x,   worst 99x
+//	wind driving upslope   median 1.28x, p95 5.91x, worst 7.61x
+//	wind cross-slope       median 2.02x, p95 5.95x, worst 7.77x
+//	wind opposing slope    median 3.29x, p95 67x,   worst 99x
 //
 // At zero wind the two usually agree exactly — with nothing to vector-add, the
 // back-solve is an identity. Two exceptions, and neither is exotic: mixedwood
-// never satisfies it (eq. 42 blends ISF, not RSF), and neither does any fuel
+// never satisfies it (eqs. 42/42b/42c blend ISF, not RSF), and neither does any fuel
 // where isfClampMin or EquivalentWindCapKmh binds, which on dry steep ground is
 // most of them. Both leave ROS reading high.
 //
@@ -105,7 +112,7 @@
 // natural assumption is wrong in both directions. It does not raise any spread
 // rate: in the published system the final rate of spread IS the surface rate for
 // every fuel type except C6, which alone has a separate crown rate of spread
-// folded in through CFB. So for fourteen of the fifteen fuels here, a crowning
+// folded in through CFB. So for sixteen of the seventeen fuels here, a crowning
 // stand's ROS was already right, and CFB is the missing statement of what kind of
 // fire that rate describes — surface, intermittent crown, or continuous crown.
 // That statement was the actual gap, not an arithmetic one.
@@ -129,7 +136,7 @@
 // checked against TestCFFDRS*, the cffdrs R package — the Canadian Forest
 // Service's own implementation, and the only oracle here that can say the tables
 // are right rather than merely self-consistent. RSI, BE and SF reproduce it
-// exactly across all 15 fuel types; ISI, WSV and the full slope path reproduce it
+// exactly across all 17 fuel types; ISI, WSV and the full slope path reproduce it
 // to machine precision over every sloped case. It is what caught the missing curing
 // branch, which had this package's fully-cured grass spreading 2.2x too fast, and
 // it is what caught the FFMC moisture constant being the rounded 147.2 rather than

@@ -160,7 +160,7 @@ func TestCFFDRSCrownFractionBurned(t *testing.T) {
 			Code: fuel, FFMC: c.FFMC, SlopePct: c.GS, WindKmh: c.WS,
 			WindAzimuthDeg:    c.WD + 180,
 			UpslopeAzimuthDeg: 0 + 180, // the fixture's Aspect, made explicit
-			PC:                c.PC, CuringPct: c.CC,
+			PC:                c.PC, PDF: c.PDF, CuringPct: c.CC,
 		}, c.BUI)
 		crown.SurfaceROS = ros
 		got = CrownFractionBurned(crown)

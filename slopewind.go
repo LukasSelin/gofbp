@@ -32,6 +32,7 @@ type SlopeWind struct {
 	WindAzimuthDeg    float64
 	UpslopeAzimuthDeg float64
 	PC                float64 // percent conifer, M1/M2 only
+	PDF               float64 // percent dead balsam fir, M3/M4 only
 	CuringPct         float64 // percent cured, O1A/O1B only
 }
 
@@ -133,11 +134,28 @@ func slopeEquivalentISF(s SlopeWind) (isf float64, clamped bool) {
 
 	switch code {
 	case "M1", "M2":
+		// Eq. 42 (FCFDG 1992).
 		c2, d1 := Fuels["C2"], Fuels["D1"]
 		w := s.PC / 100
 		isfC2, clampC2 := invertRSI(c2, rsiBase(c2, isz)*sf, 1)
 		isfD1, clampD1 := invertRSI(d1, rsiBase(d1, isz)*sf, 1)
 		return w*isfC2 + (1-w)*isfD1, clampC2 || clampD1
+	case "M3", "M4":
+		// Eqs. 42b/42c (Wotton, Alexander & Taylor 2009). Same construction as
+		// eq. 42 with the fuel's own eq. 30 curve in C2's place.
+		//
+		// Two details are read off cffdrs rather than inferred, and both are
+		// asserted by TestCFFDRSSlopeBackSolve. cffdrs reaches the pure dead-fir
+		// component by calling its own rate_of_spread with PDF forced to 100,
+		// which collapses eq. 29/33 to the fuel's own curve — so what is
+		// inverted here is rsiBase of M3/M4, not the blend. And M4 drops the 0.2
+		// on its deciduous component in the slope path exactly as M2 does, so
+		// both mixedwood pairs use the plain weight here.
+		own, d1 := Fuels[code], Fuels["D1"]
+		w := s.PDF / 100
+		isfOwn, clampOwn := invertRSI(own, rsiBase(own, isz)*sf, 1)
+		isfD1, clampD1 := invertRSI(d1, rsiBase(d1, isz)*sf, 1)
+		return w*isfOwn + (1-w)*isfD1, clampOwn || clampD1
 	case "O1A", "O1B":
 		f := Fuels[code]
 		cf := CuringFactor(s.CuringPct)

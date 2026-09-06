@@ -23,6 +23,8 @@ func Example() {
 		WindAzimuthDeg:    45,                              // the wind pushes towards NE
 		UpslopeAzimuthDeg: 45,                              // the ground rises towards NE
 		PC:                100,                             // percent conifer; M1/M2 only
+		// PDF (percent dead balsam fir, M3/M4 only) and CuringPct (O1A/O1B only)
+		// are left at zero: C2 ignores both.
 	}
 	const bui = 80
 
@@ -34,12 +36,12 @@ func Example() {
 	// The head rate. slopePct is 0 here on purpose: the slope is already inside
 	// wsv, and passing it again would count it twice.
 	isi := fbp.ISI(s.FFMC, wsv)
-	head := fbp.ROS(s.Code, isi, bui, s.PC, s.CuringPct, 0)
+	head := fbp.ROS(s.Code, isi, bui, s.PC, s.PDF, s.CuringPct, 0)
 
 	// The head rate is the single fastest direction, which for "how fast is this
 	// coming at ME" is the wrong number almost everywhere. The ellipse answers the
 	// question properly — here, for something due east of the ignition.
-	back := fbp.ROS(s.Code, isi*fbp.BackISIRatio(wsv), bui, s.PC, s.CuringPct, 0)
+	back := fbp.ROS(s.Code, isi*fbp.BackISIRatio(wsv), bui, s.PC, s.PDF, s.CuringPct, 0)
 	lb := fbp.LengthToBreadth(s.Code, wsv)
 	flank := fbp.FlankROS(head, back, lb)
 	east := fbp.ROSAtAngle(head, flank, back, fbp.AngleBetweenDeg(raz, 90))

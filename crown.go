@@ -24,7 +24,7 @@ import "math"
 // the natural assumption: in the reference implementation the final rate of
 // spread is the SURFACE rate for every fuel type except C6 — cffdrs'
 // rate_of_spread() returns RSS unchanged wherever the fuel is not C6, and folds
-// CFB in only through C6's separate crown path. So for fourteen of the fifteen
+// CFB in only through C6's separate crown path. So for sixteen of the seventeen
 // fuels here, CFB is a classification of a spread rate this package already
 // computes correctly, not a correction to it. C6's crown path is not implemented
 // (see the package doc), so C6's ROS remains surface-only.

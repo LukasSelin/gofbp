@@ -232,7 +232,7 @@ func TestCFFDRSSlopeBackSolve(t *testing.T) {
 			Code: fuel, FFMC: c.FFMC, SlopePct: c.GS, WindKmh: c.WS,
 			WindAzimuthDeg:    c.WD + 180,
 			UpslopeAzimuthDeg: 0 + 180, // the fixture's Aspect, made explicit
-			PC:                c.PC, CuringPct: c.CC,
+			PC:                c.PC, PDF: c.PDF, CuringPct: c.CC,
 		}
 		n++
 		perFuel[fuel]++
@@ -281,10 +281,21 @@ func TestCFFDRSSlopeBackSolve(t *testing.T) {
 		t.Fatalf("only %d sloped non-crowning cases — the back-solve is effectively unasserted", n)
 	}
 
-	// The mixedwood ISF blend is reasoning, not measurement, until these appear.
-	// M1 is a common real-world mapping. See gen_cffdrs_reference.R.
+	// The mixedwood ISF blends are reasoning, not measurement, until these
+	// appear. M1 is a common real-world mapping. See gen_cffdrs_reference.R.
 	if perFuel["M1"] == 0 && perFuel["M2"] == 0 {
-		t.Log("NOTE: no sloped mixedwood cases — the eq. 42 ISF blend is unoracled")
+		t.Log("NOTE: no sloped M1/M2 cases — the eq. 42 ISF blend is unoracled")
+	}
+	// Eqs. 42b/42c carry two readings taken off cffdrs' R source rather than
+	// measured — that the pure dead-fir component is reached by forcing PDF to
+	// 100, and that M4 drops its 0.2 deciduous weighting in the slope path the
+	// way M2 does. Both are invisible to every other test here: they change the
+	// blend's inputs, not its shape, so a wrong reading still produces a smooth,
+	// monotone, correctly-bracketed spread rate. These rows are the only thing
+	// that can contradict them.
+	if perFuel["M3"] == 0 && perFuel["M4"] == 0 {
+		t.Log("NOTE: no sloped M3/M4 cases — eqs. 42b/42c are unoracled; " +
+			"the fixture predates them, so regenerate it")
 	}
 }
 
@@ -298,7 +309,7 @@ func TestCFFDRSSlopeBackSolve(t *testing.T) {
 // go in, and the fact that SF does not appear.
 func slopeAdjustedROS(s SlopeWind, bui float64) (rosMMin, razDeg float64) {
 	wsv, raz := NetEffectiveWind(s)
-	return RSI(s.Code, ISI(s.FFMC, wsv), s.PC, s.CuringPct) * BuildupEffect(s.Code, bui), raz
+	return RSI(s.Code, ISI(s.FFMC, wsv), s.PC, s.PDF, s.CuringPct) * BuildupEffect(s.Code, bui), raz
 }
 
 // relErr is closeEnough's metric, exposed for logging how much headroom the
@@ -329,7 +340,7 @@ func TestCFFDRSSurfaceROS(t *testing.T) {
 		}
 		fuel := ourFuel(c.Fuel)
 		perFuel[fuel]++
-		got := ROS(fuel, c.ISI, c.BUI, c.PC, c.CC, 0)
+		got := ROS(fuel, c.ISI, c.BUI, c.PC, c.PDF, c.CC, 0)
 		if !closeEnough(got, c.ROS, tol) {
 			bad[fuel]++
 			if shown++; shown <= 15 {
@@ -414,7 +425,7 @@ func TestCFFDRSSlopeDivergence(t *testing.T) {
 			unpaired++
 			continue
 		}
-		got := ROS(ourFuel(c.Fuel), isi, c.BUI, c.PC, c.CC, c.GS)
+		got := ROS(ourFuel(c.Fuel), isi, c.BUI, c.PC, c.PDF, c.CC, c.GS)
 		ratio := got / c.ROS
 		if c.WS == 0 {
 			// Structural: with no wind there is nothing to vector-add, so the
@@ -444,10 +455,10 @@ func TestCFFDRSSlopeDivergence(t *testing.T) {
 			fuel := ourFuel(c.Fuel)
 			zw := SlopeWind{
 				Code: fuel, FFMC: c.FFMC, SlopePct: c.GS,
-				PC: c.PC, CuringPct: c.CC,
+				PC: c.PC, PDF: c.PDF, CuringPct: c.CC,
 			}
 			_, clamped := slopeEquivalentISF(zw)
-			mixedwood := fuel == "M1" || fuel == "M2"
+			mixedwood := fuel == "M1" || fuel == "M2" || fuel == "M3" || fuel == "M4"
 			if clamped || mixedwood || EquivalentWind(zw) >= EquivalentWindCapKmh {
 				noWindBound++
 				if ratio < 1-1e-9 {

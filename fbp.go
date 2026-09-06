@@ -13,9 +13,19 @@ type Fuel struct {
 	BUI0 float64
 }
 
-// Fuels is the ST-X-3 coefficient table. C = conifer, D = deciduous,
-// M = mixedwood, S = slash, O = open/grass. M1/M2 carry no RSI coefficients of
-// their own — their RSI is a percent-conifer blend of C2 and D1 (see RSI).
+// Fuels is the coefficient table: ST-X-3's Tables 6-7, plus M3 and M4 from
+// Wotton, Alexander & Taylor (2009). C = conifer, D = deciduous, M = mixedwood,
+// S = slash, O = open/grass.
+//
+// The two mixedwood pairs are not alike, and the NaNs are how that is stated.
+// M1/M2 carry no RSI coefficients of their own at all — their RSI is a
+// percent-conifer blend of the C2 and D1 curves, so an a, b or c for M1 would be
+// a number with nothing behind it, and NaN is what makes reading one an obvious
+// failure rather than a plausible one. M3/M4 do have their own curves (eq. 30),
+// which the blend then weights against D1 by percent dead balsam fir. So
+// rsiBase(Fuels["M3"], isi) is a real quantity — the pure dead-fir component —
+// while rsiBase(Fuels["M1"], isi) is NaN by construction. Neither is the fuel's
+// RSI; both mixedwood pairs get their RSI from the blends in RSI.
 var Fuels = map[string]Fuel{
 	"C1":  {"C1", 90, 0.0649, 4.5, 0.90, 72},
 	"C2":  {"C2", 110, 0.0282, 1.5, 0.70, 64},
@@ -32,6 +42,10 @@ var Fuels = map[string]Fuel{
 	"O1B": {"O1B", 250, 0.0350, 1.7, 1.00, 1},
 	"M1":  {"M1", math.NaN(), math.NaN(), math.NaN(), 0.80, 50},
 	"M2":  {"M2", math.NaN(), math.NaN(), math.NaN(), 0.80, 50},
+	// Wotton, Alexander & Taylor (2009) eq. 30. All four mixedwoods share
+	// q = 0.80 and BUI0 = 50.
+	"M3": {"M3", 120, 0.0572, 1.40, 0.80, 50},
+	"M4": {"M4", 100, 0.0404, 1.48, 0.80, 50},
 }
 
 // maxFuelCodeLen bounds the fold buffer in CanonicalFuelCode. The longest key in
@@ -56,11 +70,9 @@ const maxFuelCodeLen = 8
 // input land there, and both are ordinary:
 //
 //   - A typo, or a fuel column from a source whose class names are not FBP's.
-//   - M3 and M4, the dead-balsam-fir mixedwoods. They are real FBP fuels
-//     (Wotton, Alexander & Taylor 2009, eqs. 29-33) and cffdrs implements both;
-//     this package does not, because their percent-dead-fir input PDF has no
-//     home in these signatures. A stand that maps to M3 is not a stand that
-//     does not burn.
+//   - D2, and cffdrs' non-fuel classes WA and NF. D2 is a real fuel in the
+//     published system that this package has no coefficients for, so a stand
+//     mapping to it is not a stand that does not burn.
 //
 // Call this at the boundary where fuel codes enter — once per class, not once
 // per cell — and decide there what an unimplemented fuel means for your output.
@@ -129,20 +141,33 @@ func CuringFactor(curingPct float64) float64 {
 }
 
 // RSI is the initial spread rate for a fuel type at a given ISI, in m/min.
-// pc is percent conifer, used only by the M1/M2 blends; curingPct applies only
-// to the O1 grass fuels.
+//
+// The three blend inputs are each used by exactly one family, and each is
+// ignored by every other fuel:
+//
+//	pc         percent conifer, M1/M2 only
+//	pdf        percent dead balsam fir, M3/M4 only
+//	curingPct  percent cured, O1A/O1B only
+//
+// pc and pdf are different physical quantities and are not interchangeable. Both
+// are "how much of this mixedwood is the flammable component", but the component
+// differs — conifer for M1/M2, dead balsam fir for M3/M4 — and so does the curve
+// it weights. They are separate parameters rather than one because a fuel map
+// that carries both carries them in different columns, and collapsing them here
+// would make a transposed column a plausible number instead of a compile error.
 //
 // The code is folded by CanonicalFuelCode, so case and separators do not matter.
-// A code that survives the fold without naming a fuel this package implements —
-// a typo, or M3/M4, which are real FBP fuels absent here — returns 0, which no
-// caller can tell apart from a cell that will not spread. Check the code with
-// CanonicalFuelCode where fuel classes enter, not here.
-func RSI(code string, isi, pc, curingPct float64) float64 {
+// A code that survives the fold without naming a fuel this package implements
+// returns 0, which no caller can tell apart from a cell that will not spread.
+// Check the code with CanonicalFuelCode where fuel classes enter, not here.
+func RSI(code string, isi, pc, pdf, curingPct float64) float64 {
 	code, ok := CanonicalFuelCode(code)
 	if !ok {
 		return 0
 	}
-	if code == "M1" || code == "M2" {
+	switch code {
+	case "M1", "M2":
+		// Eq. 27 (FCFDG 1992): a percent-conifer blend of the C2 and D1 curves.
 		c2 := rsiBase(Fuels["C2"], isi)
 		d1 := rsiBase(Fuels["D1"], isi)
 		w := pc / 100
@@ -151,6 +176,18 @@ func RSI(code string, isi, pc, curingPct float64) float64 {
 		}
 		// M2's dead-fir component contributes at 20%.
 		return w*c2 + 0.2*(1-w)*d1
+	case "M3", "M4":
+		// Eqs. 29 and 33 (Wotton, Alexander & Taylor 2009): the same shape as
+		// eq. 27, but weighting the fuel's OWN eq. 30 curve — not C2's — against
+		// D1 by percent dead balsam fir. M4 carries the same 0.2 on its
+		// deciduous component that M2 does.
+		own := rsiBase(Fuels[code], isi)
+		d1 := rsiBase(Fuels["D1"], isi)
+		w := pdf / 100
+		if code == "M3" {
+			return w*own + (1-w)*d1
+		}
+		return w*own + 0.2*(1-w)*d1
 	}
 	base := rsiBase(Fuels[code], isi)
 	if code == "O1A" || code == "O1B" {
@@ -203,7 +240,7 @@ func SlopeFactor(slopePct float64) float64 {
 //
 // This is NOT the published slope path. Slope enters here as a multiplier, so it
 // applies whole regardless of wind direction, and the result is an upper bound
-// wherever wind is not blowing uphill (median 2.98x, worst 99x with wind opposing
+// wherever wind is not blowing uphill (median 3.29x, worst 99x with wind opposing
 // the slope; see the package doc and TestCFFDRSSlopeDivergence). It never
 // under-estimates.
 //
@@ -211,8 +248,8 @@ func SlopeFactor(slopePct float64) float64 {
 // cannot run. A caller with all four inputs should take WSV from
 // NetEffectiveWind, feed ISI(FFMC, WSV) in here, and pass slopePct = 0 so the
 // slope is not counted twice — it is already inside WSV.
-func ROS(code string, isi, bui, pc, curingPct, slopePct float64) float64 {
-	return RSI(code, isi, pc, curingPct) * BuildupEffect(code, bui) * SlopeFactor(slopePct)
+func ROS(code string, isi, bui, pc, pdf, curingPct, slopePct float64) float64 {
+	return RSI(code, isi, pc, pdf, curingPct) * BuildupEffect(code, bui) * SlopeFactor(slopePct)
 }
 
 // ffmcMoistureScale converts FFMC to fine-fuel moisture content (Van Wagner
