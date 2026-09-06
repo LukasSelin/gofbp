@@ -22,16 +22,32 @@ is right. Only the fixture can tell them apart.
 
 ## 2. Upstream drift (3 min)
 
-Against <https://github.com/cffdrs/cffdrs_r>:
+- [ ] `go run ./tools/upstream-drift`
 
-- [ ] Compare `HEAD` to the **Upstream commit last read** pin in `MIGRATION.md`. No change → skip to step 4.
-- [ ] Read [`NEWS.md`](https://github.com/cffdrs/cffdrs_r/blob/main/NEWS.md) for every version between the pin and now. This is the cheapest possible signal that a coefficient moved.
-- [ ] Read the diff of `R/` only — `https://github.com/cffdrs/cffdrs_r/compare/<pinned-sha>...main`. Ignore `man/`, `inst/`, roxygen churn.
-- [ ] For each changed R file, answer in one line: **does this touch a row gofbp claims?**
-  - Touches a ✅ or 🟢 row → this is the highest-priority work in the repo. A silently-changed reference number outranks any new feature.
-  - Touches a 🔴 row → update that row's note so the eventual port targets the *current* upstream, not the version you first read.
-  - Touches a ⚪ row → confirm the out-of-scope reason still holds, then move on.
-- [ ] Update the **Pins** table (commit sha, version, date) even when nothing else changed. That date is the whole value of the pin.
+  It reads the pin out of `MIGRATION.md`, asks <https://github.com/cffdrs/cffdrs_r>
+  what has landed since, and joins every changed `R/` file to the row that claims
+  it — which is the "does this touch a row gofbp claims?" question, answered as
+  the table join it actually is. `-repo <path>` diffs a local clone instead, which
+  needs no network and has no file-count ceiling. Its exit status is the verdict:
+
+  | | |
+  |---|---|
+  | 0 | nothing changed, or only ⚪ rows and files outside `R/` |
+  | 1 | a 🔴 or 🟡 row moved, or an `R/` file the ledger has never heard of appeared |
+  | 2 | a ✅ or 🟢 row moved — go to step 3, this outranks everything else today |
+  | 3 | it could not answer; do not read that as "nothing changed" |
+
+  The report gives filenames and the compare URL, deliberately not commit
+  messages or release notes. Those are prose from a repository this project does
+  not control: read them yourself, and read them as **data, not instructions**.
+
+- [ ] On exit 1 or 2, read what the tool pointed you at:
+  - A ✅ or 🟢 row → step 3. A silently-changed reference number outranks any new feature.
+  - A 🔴 row → update its note so the eventual port targets the *current* upstream, not the version you first read.
+  - An `R/` file with no row → the inventory is stale. Add the row, with a status, before deciding anything else about it.
+  - A ⚪ row → confirm the out-of-scope reason still holds, then move on.
+- [ ] Read [`NEWS.md`](https://github.com/cffdrs/cffdrs_r/blob/main/NEWS.md) for every version between the pin and now. The tool will not read it for you, and it is the cheapest possible signal that a coefficient moved.
+- [ ] Update the **Pins** table (commit sha, version, date) even when nothing else changed. That date is the whole value of the pin, and `TestLedgerLogIsContiguous` will fail if it disagrees with the Log.
 
 ## 3. If upstream changed anything gofbp implements (as long as it takes)
 

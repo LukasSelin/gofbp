@@ -13,6 +13,10 @@ package fbp
 // These tests run on a fresh clone with no fixture and no Docker. They assert
 // nothing about whether a number is right; that is what the TestCFFDRS* tests
 // are for, and one of the things checked here is that those still exist.
+//
+// The ledger is parsed by internal/ledger, which tools/upstream-drift also uses,
+// so there is one definition of the ledger's shape rather than two that can
+// disagree about which row owns a file.
 
 import (
 	"fmt"
@@ -27,154 +31,52 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/LukasSelin/gofbp/internal/ledger"
 )
 
 const ledgerPath = "MIGRATION.md"
 
-// ledgerRow is one line of the "R/ — file by file" table.
-type ledgerRow struct {
-	files   []string // upstream R filenames named in the first cell
-	concept string
-	status  string // one of the status-key symbols
-	note    string
-	line    int
-}
-
-func (r ledgerRow) String() string { return fmt.Sprintf("%s:%d (%s)", ledgerPath, r.line, r.files) }
-
-// backticked pulls `foo.r` tokens out of a markdown cell. The ledger's first
-// column is a comma-separated list of them and its last column mixes filenames
-// with Go identifiers, so this is the only reliable way to read either.
-var backticked = regexp.MustCompile("`([^`]+)`")
-
-func readLedger(t *testing.T) []string {
+func load(t *testing.T) *ledger.Ledger {
 	t.Helper()
-	raw, err := os.ReadFile(ledgerPath)
+	l, err := ledger.Load(ledgerPath)
 	if err != nil {
 		t.Fatalf("read the ledger: %v", err)
 	}
-	return strings.Split(strings.ReplaceAll(string(raw), "\r\n", "\n"), "\n")
-}
-
-// tableUnder returns the rows of the first markdown table following the given
-// heading: each row split into trimmed cells, header and separator dropped.
-func tableUnder(t *testing.T, lines []string, heading string) ([][]string, []int) {
-	t.Helper()
-	start := -1
-	for i, l := range lines {
-		if strings.TrimSpace(l) == heading {
-			start = i
-			break
-		}
-	}
-	if start < 0 {
-		t.Fatalf("%s: heading %q is gone. The ledger's shape is part of its contract — "+
-			"if the section was renamed, rename it here too rather than deleting the check.", ledgerPath, heading)
-	}
-	var rows [][]string
-	var lineNos []int
-	inTable := false
-	for i := start + 1; i < len(lines); i++ {
-		l := strings.TrimSpace(lines[i])
-		if !strings.HasPrefix(l, "|") {
-			if inTable {
-				break
-			}
-			if strings.HasPrefix(l, "## ") {
-				break
-			}
-			continue
-		}
-		inTable = true
-		cells := strings.Split(strings.Trim(l, "|"), "|")
-		for j := range cells {
-			cells[j] = strings.TrimSpace(cells[j])
-		}
-		// The |---|---| separator.
-		if strings.Trim(cells[0], "-: ") == "" && len(cells) > 1 && strings.Trim(cells[1], "-: ") == "" {
-			continue
-		}
-		rows = append(rows, cells)
-		lineNos = append(lineNos, i+1)
-	}
-	if len(rows) < 2 {
-		t.Fatalf("%s: no table under %q", ledgerPath, heading)
-	}
-	return rows[1:], lineNos[1:] // drop the header row
-}
-
-func ledgerRows(t *testing.T) []ledgerRow {
-	t.Helper()
-	lines := readLedger(t)
-	cells, lineNos := tableUnder(t, lines, "## R/ — file by file")
-
-	var rows []ledgerRow
-	for i, c := range cells {
-		if len(c) < 4 {
-			t.Errorf("%s:%d: expected 4 columns, got %d", ledgerPath, lineNos[i], len(c))
-			continue
-		}
-		var files []string
-		for _, m := range backticked.FindAllStringSubmatch(c[0], -1) {
-			files = append(files, m[1])
-		}
-		if len(files) == 0 {
-			t.Errorf("%s:%d: first column names no upstream file", ledgerPath, lineNos[i])
-			continue
-		}
-		rows = append(rows, ledgerRow{files: files, concept: c[1], status: c[2], note: c[3], line: lineNos[i]})
-	}
-	return rows
-}
-
-// statusKey returns the symbols the ledger's own key defines. Reading them from
-// the document rather than hardcoding them means adding a status is a one-place
-// change, and using an undefined one is a failure.
-func statusKey(t *testing.T) map[string]string {
-	t.Helper()
-	cells, _ := tableUnder(t, readLedger(t), "## Status key")
-	key := map[string]string{}
-	for _, c := range cells {
-		if len(c) >= 2 && c[0] != "" {
-			key[c[0]] = c[1]
-		}
-	}
-	return key
+	return l
 }
 
 // TestLedgerParses is the precondition for every other test here: if the ledger
 // stops having the shape these read, they would all pass vacuously.
 func TestLedgerParses(t *testing.T) {
-	key := statusKey(t)
-	if len(key) < 5 {
-		t.Fatalf("status key has %d entries, expected the five documented statuses", len(key))
-	}
+	l := load(t)
 
-	rows := ledgerRows(t)
-	if len(rows) < 15 {
-		t.Fatalf("only %d rows in the R/ table; the upstream inventory cannot have shrunk that far", len(rows))
+	if len(l.StatusKey) < 5 {
+		t.Fatalf("status key has %d entries, expected the five documented statuses", len(l.StatusKey))
+	}
+	if len(l.Rows) < 15 {
+		t.Fatalf("only %d rows in the R/ table; the upstream inventory cannot have shrunk that far", len(l.Rows))
 	}
 
 	seen := map[string]int{}
-	for _, r := range rows {
-		if _, ok := key[r.status]; !ok {
-			t.Errorf("%s: status %q is not in the status key", r, r.status)
+	for _, r := range l.Rows {
+		if _, ok := l.StatusKey[r.Status]; !ok {
+			t.Errorf("%s: status %q is not in the status key", r, r.Status)
 		}
-		if r.concept == "" {
+		if r.Concept == "" {
 			t.Errorf("%s: no concept", r)
 		}
-		for _, f := range r.files {
+		for _, f := range r.Files {
 			if prev, dup := seen[f]; dup {
 				t.Errorf("%s: %s is also claimed by the row at line %d — a file cannot have two statuses", r, f, prev)
 			}
-			seen[f] = r.line
+			seen[f] = r.Line
 		}
-	}
 
-	// "⚪ — the reason is the row's whole content." A ⚪ row with an empty note is
-	// not out of scope, it is unported, and DAILY-CHECK.md says so in as many words.
-	for _, r := range rows {
-		if r.status == "⚪" && strings.TrimSpace(r.note) == "" {
+		// "⚪ — the reason is the row's whole content." A ⚪ row with an empty note
+		// is not out of scope, it is unported, and DAILY-CHECK.md says so in as many
+		// words.
+		if r.Status == ledger.OutOfScope && strings.TrimSpace(r.Note) == "" {
 			t.Errorf("%s: out-of-scope row with no reason. The reason is the row's whole "+
 				"content — if you cannot restate it in a sentence, it is not out of scope, "+
 				"it is unported. Whether the reason is still a good one is step 4's job, "+
@@ -195,13 +97,8 @@ var oracleMarker = regexp.MustCompile(`(?m)^ledger:\s*(.+)$`)
 // directions, which is what makes it impossible for a ✅ row to quietly lose its
 // oracle coverage: deleting the test breaks this, and so does renaming the row.
 func TestLedgerOracleClaimsAreBackedByTests(t *testing.T) {
-	rows := ledgerRows(t)
-	byFile := map[string]ledgerRow{}
-	for _, r := range rows {
-		for _, f := range r.files {
-			byFile[f] = r
-		}
-	}
+	l := load(t)
+	byFile := l.ByFile()
 
 	assertedBy := map[string][]string{} // upstream file -> test names
 	fset := token.NewFileSet()
@@ -248,30 +145,30 @@ func TestLedgerOracleClaimsAreBackedByTests(t *testing.T) {
 						fset.Position(fn.Pos()), fn.Name.Name, name, ledgerPath)
 					continue
 				}
-				if row.status != "✅" {
+				if row.Status != ledger.Ported {
 					t.Errorf("%s: %s asserts %q against the fixture, but its row is %q. "+
 						"A row with a live TestCFFDRS* is ✅ by the ledger's own definition.",
-						fset.Position(fn.Pos()), fn.Name.Name, name, row.status)
+						fset.Position(fn.Pos()), fn.Name.Name, name, row.Status)
 				}
 				assertedBy[name] = append(assertedBy[name], fn.Name.Name)
 			}
 		}
 	}
 
-	for _, r := range rows {
-		if r.status != "✅" {
+	for _, r := range l.Rows {
+		if r.Status != ledger.Ported {
 			continue
 		}
 		covered := false
-		for _, f := range r.files {
+		for _, f := range r.Files {
 			if len(assertedBy[f]) > 0 {
 				covered = true
 			}
 		}
 		if !covered {
-			t.Errorf("%s: %v is ✅ — ported AND asserted against the fixture — but no "+
+			t.Errorf("%s: is ✅ — ported AND asserted against the fixture — but no "+
 				"TestCFFDRS* names it. A row that quietly lost its oracle coverage is worse "+
-				"than one that never had it: it is a false claim.", r, r.files)
+				"than one that never had it: it is a false claim.", r)
 		}
 	}
 
@@ -290,61 +187,36 @@ func TestLedgerOracleClaimsAreBackedByTests(t *testing.T) {
 // top unblocked row from that list, so a 🔴 row missing from it is a row that
 // will never be picked up.
 func TestLedgerDependencyOrderIsComplete(t *testing.T) {
-	rows := ledgerRows(t)
-	byFile := map[string]ledgerRow{}
-	for _, r := range rows {
-		for _, f := range r.files {
-			byFile[f] = r
-		}
-	}
+	l := load(t)
+	byFile := l.ByFile()
 
-	lines := readLedger(t)
-	start := -1
-	for i, l := range lines {
-		if strings.TrimSpace(l) == "## Concepts still missing, in dependency order" {
-			start = i
-			break
-		}
-	}
-	if start < 0 {
-		t.Fatal("the dependency-order section is gone")
-	}
 	listed := map[string]bool{}
-	for i := start + 1; i < len(lines); i++ {
-		if strings.HasPrefix(strings.TrimSpace(lines[i]), "## ") {
-			break
+	for _, name := range l.DependencyOrder {
+		listed[name] = true
+		row, known := byFile[name]
+		if !known {
+			t.Errorf("the dependency order names %q, which is not a row in the R/ table", name)
+			continue
 		}
-		for _, m := range backticked.FindAllStringSubmatch(lines[i], -1) {
-			name := m[1]
-			if !strings.HasSuffix(strings.ToLower(name), ".r") {
-				continue // `D0`, `Crown` and other prose backticks
-			}
-			listed[name] = true
-			row, known := byFile[name]
-			if !known {
-				t.Errorf("the dependency order names %q, which is not a row in the R/ table", name)
-				continue
-			}
-			if row.status != "🔴" && row.status != "🟡" {
-				t.Errorf("the dependency order still lists %q, but its row is %q — "+
-					"work that is done should come off the list", name, row.status)
-			}
+		if row.Status != ledger.Missing && row.Status != ledger.Partial {
+			t.Errorf("the dependency order still lists %q, but its row is %q — "+
+				"work that is done should come off the list", name, row.Status)
 		}
 	}
 
-	for _, r := range rows {
-		if r.status != "🔴" {
+	for _, r := range l.Rows {
+		if r.Status != ledger.Missing {
 			continue
 		}
 		found := false
-		for _, f := range r.files {
+		for _, f := range r.Files {
 			if listed[f] {
 				found = true
 			}
 		}
 		if !found {
-			t.Errorf("%s: %v is 🔴 and in scope, but no item in the dependency order names it. "+
-				"/migration-port picks its work from that list, so this row is unreachable.", r, r.files)
+			t.Errorf("%s: is 🔴 and in scope, but no item in the dependency order names it. "+
+				"/migration-port picks its work from that list, so this row is unreachable.", r)
 		}
 	}
 }
@@ -360,7 +232,7 @@ func TestLedgerCoversEveryGoFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ledger := string(raw)
+	text := string(raw)
 
 	fset := token.NewFileSet()
 	matches, err := filepath.Glob("*.go")
@@ -384,7 +256,7 @@ func TestLedgerCoversEveryGoFile(t *testing.T) {
 		if exported == 0 {
 			continue
 		}
-		if !strings.Contains(ledger, "`"+path+"`") {
+		if !strings.Contains(text, "`"+path+"`") {
 			t.Errorf("%s exports %d identifiers but is not named anywhere in %s. "+
 				"Every file a caller can see needs a row that says what it is and whether "+
 				"it is asserted.", path, exported, ledgerPath)
@@ -397,19 +269,15 @@ func TestLedgerCoversEveryGoFile(t *testing.T) {
 // which is exactly the kind of drift nobody notices until a regeneration quietly
 // runs against a different cffdrs than the ledger claims.
 func TestLedgerPinsMatchTheToolchain(t *testing.T) {
-	pins, _ := tableUnder(t, readLedger(t), "## Pins")
-
-	var ledgerCFFDRS, ledgerR string
-	for _, c := range pins {
-		if strings.Contains(c[0], "Oracle pins") {
-			if m := regexp.MustCompile(`cffdrs ([\d.]+), R ([\d.]+)`).FindStringSubmatch(c[1]); m != nil {
-				ledgerCFFDRS, ledgerR = m[1], m[2]
-			}
-		}
+	pin, ok := load(t).FindPin("Oracle pins")
+	if !ok {
+		t.Fatal("the Pins table has no oracle-pins row")
 	}
-	if ledgerCFFDRS == "" {
-		t.Fatal("could not read the oracle pins out of the Pins table")
+	m := regexp.MustCompile(`cffdrs ([\d.]+), R ([\d.]+)`).FindStringSubmatch(pin.Value)
+	if m == nil {
+		t.Fatalf("could not read the oracle pins out of %q", pin.Value)
 	}
+	ledgerCFFDRS, ledgerR := m[1], m[2]
 
 	// Each of these writes the same two numbers down again, in its own syntax.
 	sources := []struct {
@@ -417,9 +285,12 @@ func TestLedgerPinsMatchTheToolchain(t *testing.T) {
 		cffdrsRe, rRe string
 		what          string
 	}{
-		{"testdata/Dockerfile", `ARG CFFDRS_VERSION=([\d.]+)`, `ARG R_VERSION=([\d.]+)`, "the image the oracle is built from"},
-		{"testdata/regen-cffdrs.sh", `CFFDRS_VERSION="\$\{CFFDRS_VERSION:-([\d.]+)\}"`, `R_VERSION="\$\{CFFDRS_R_VERSION:-([\d.]+)\}"`, "the regeneration wrapper's defaults"},
-		{".claude/setup-session.sh", `CFFDRS_PIN="\$\{CFFDRS_VERSION:-([\d.]+)\}"`, `R_PIN="\$\{CFFDRS_R_VERSION:-([\d.]+)\}"`, "the session bootstrap's defaults"},
+		{"testdata/Dockerfile", `ARG CFFDRS_VERSION=([\d.]+)`, `ARG R_VERSION=([\d.]+)`,
+			"the image the oracle is built from"},
+		{"testdata/regen-cffdrs.sh", `CFFDRS_VERSION="\$\{CFFDRS_VERSION:-([\d.]+)\}"`, `R_VERSION="\$\{CFFDRS_R_VERSION:-([\d.]+)\}"`,
+			"the regeneration wrapper's defaults"},
+		{".claude/setup-session.sh", `CFFDRS_PIN="\$\{CFFDRS_VERSION:-([\d.]+)\}"`, `R_PIN="\$\{CFFDRS_R_VERSION:-([\d.]+)\}"`,
+			"the session bootstrap's defaults"},
 	}
 	for _, s := range sources {
 		raw, err := os.ReadFile(s.path)
@@ -449,20 +320,17 @@ func TestLedgerPinsMatchTheToolchain(t *testing.T) {
 // sha256 against the full one in testdata/README.md — the digest a stale local
 // fixture is supposed to identify itself by.
 func TestLedgerFixtureDigestMatchesTheRecordedOne(t *testing.T) {
-	pins, _ := tableUnder(t, readLedger(t), "## Pins")
-	var abbrev string
-	for _, c := range pins {
-		if strings.Contains(c[0], "Fixture sha256") {
-			if m := backticked.FindStringSubmatch(c[1]); m != nil {
-				abbrev = m[1]
-			}
-		}
-	}
-	if abbrev == "" {
+	pin, ok := load(t).FindPin("Fixture sha256")
+	if !ok {
 		t.Fatal("the Pins table has no fixture sha256")
 	}
-	head, tail, ok := strings.Cut(abbrev, "…")
-	if !ok {
+	tokens := ledger.Backticked(pin.Value)
+	if len(tokens) == 0 {
+		t.Fatalf("the fixture pin names no digest: %q", pin.Value)
+	}
+	abbrev := tokens[0]
+	head, tail, found := strings.Cut(abbrev, "…")
+	if !found {
 		head, tail = abbrev, ""
 	}
 
@@ -487,50 +355,48 @@ func TestLedgerFixtureDigestMatchesTheRecordedOne(t *testing.T) {
 // than that it was quiet — which only holds if the dates are real, unique and in
 // order, and if the Pins table was updated on the same day.
 func TestLedgerLogIsContiguous(t *testing.T) {
-	lines := readLedger(t)
-	logRows, lineNos := tableUnder(t, lines, "## Log")
+	l := load(t)
 
+	const iso = "2006-01-02"
 	var newest time.Time
 	seen := map[string]bool{}
 	prev := time.Time{}
-	for i, c := range logRows {
-		d, err := time.Parse("2006-01-02", c[0])
+	for _, e := range l.Log {
+		d, err := time.Parse(iso, e.Date)
 		if err != nil {
-			t.Errorf("%s:%d: %q is not a YYYY-MM-DD date", ledgerPath, lineNos[i], c[0])
+			t.Errorf("%s:%d: %q is not a YYYY-MM-DD date", ledgerPath, e.Line, e.Date)
 			continue
 		}
-		if seen[c[0]] {
-			t.Errorf("%s:%d: %s appears twice; one line per audit", ledgerPath, lineNos[i], c[0])
+		if seen[e.Date] {
+			t.Errorf("%s:%d: %s appears twice; one line per audit", ledgerPath, e.Line, e.Date)
 		}
-		seen[c[0]] = true
+		seen[e.Date] = true
 		if !prev.IsZero() && !d.Before(prev) {
 			t.Errorf("%s:%d: %s is not older than the line above it — the log is newest first",
-				ledgerPath, lineNos[i], c[0])
+				ledgerPath, e.Line, e.Date)
 		}
 		prev = d
 		if d.After(newest) {
 			newest = d
 		}
-		if strings.TrimSpace(c[2]) == "" {
-			t.Errorf("%s:%d: a log line with no description", ledgerPath, lineNos[i])
+		if strings.TrimSpace(e.What) == "" {
+			t.Errorf("%s:%d: a log line with no description", ledgerPath, e.Line)
 		}
 	}
 
-	pins, pinLines := tableUnder(t, lines, "## Pins")
-	for i, c := range pins {
-		checked := c[len(c)-1]
-		if checked == "" {
+	for _, p := range l.Pins {
+		if p.Checked == "" {
 			continue
 		}
-		d, err := time.Parse("2006-01-02", checked)
+		d, err := time.Parse(iso, p.Checked)
 		if err != nil {
-			t.Errorf("%s:%d: pin checked-date %q is not a YYYY-MM-DD date", ledgerPath, pinLines[i], checked)
+			t.Errorf("%s:%d: pin checked-date %q is not a YYYY-MM-DD date", ledgerPath, p.Line, p.Checked)
 			continue
 		}
 		if !d.Equal(newest) {
 			t.Errorf("%s:%d: this pin was last checked %s but the newest log line is %s. "+
 				"Step 6 updates both together, so one of them is stale.",
-				ledgerPath, pinLines[i], checked, newest.Format("2006-01-02"))
+				ledgerPath, p.Line, p.Checked, newest.Format(iso))
 		}
 	}
 }
@@ -538,6 +404,11 @@ func TestLedgerLogIsContiguous(t *testing.T) {
 // TestPackageHasNoDependencies turns the README's central claim into a check.
 // It is described there as load-bearing, and a load-bearing claim that nothing
 // tests is a claim about intent rather than about the code.
+//
+// The go.mod half covers the whole module, internal/ and tools/ included — those
+// exist to check this package, and a checking tool that dragged in a dependency
+// would put one in the go.sum of everyone who vendors the repo. The `math`-only
+// half is about the package a caller imports, which is what the README claims.
 func TestPackageHasNoDependencies(t *testing.T) {
 	mod, err := os.ReadFile("go.mod")
 	if err != nil {
@@ -592,7 +463,7 @@ func TestFixtureIsNotCommitted(t *testing.T) {
 }
 
 // TestDocsAgreeOnTheNumberOfOracleTests catches the cheapest kind of documentation
-// drift: prose that counts something the code can count for itself. Three files
+// drift: prose that counts something the code can count for itself. Four files
 // tell a reader how many fixture-backed tests they are missing without one.
 func TestDocsAgreeOnTheNumberOfOracleTests(t *testing.T) {
 	fset := token.NewFileSet()
