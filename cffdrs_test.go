@@ -73,6 +73,12 @@ type cffdrsFixture struct {
 
 // ourFuel maps a cffdrs fuel name onto this package's key. cffdrs spells the
 // grass fuels O1a/O1b; ST-X-3's tables and Fuels use O1A/O1B.
+//
+// The package no longer needs this at a call site — CanonicalFuelCode folds the
+// fixture's spelling itself, and TestSpellingDoesNotChangeAnyAnswer is what
+// holds that. It stays because the per-fuel tallies below key their maps on the
+// result, and a tally split between "O1a" and "O1B" would under-report coverage
+// on both without failing anything.
 func ourFuel(code string) string { return strings.ToUpper(code) }
 
 func loadCFFDRS(t *testing.T) cffdrsFixture {

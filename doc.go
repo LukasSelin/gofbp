@@ -27,9 +27,33 @@
 // coefficient, a threshold or a default here because of something about a
 // particular landscape, it belongs there instead.
 //
+// # Fuel codes
+//
+// Implemented: C1-C7, D1, M1, M2, S1-S3, O1A and O1B — the fifteen fuel types of
+// ST-X-3. Codes are folded by CanonicalFuelCode, so case and separators do not
+// matter: "O1a", "o1b" and "C-2" reach the same coefficients as "O1A", "O1B" and
+// "C2". The lowercase grass spellings are the ones ST-X-3 itself prints, and a
+// raster labelled the way the source document labels it must not read as a
+// different fuel from one labelled the way Fuels is keyed.
+//
+// NOT implemented: M3 and M4, the dead-balsam-fir mixedwoods added in Wotton,
+// Alexander & Taylor (2009, eqs. 29-33). cffdrs has both; they need a
+// percent-dead-fir input PDF that has no home in these signatures, and adding
+// one is a change to every fuel's call site rather than a new table row. Also
+// absent are cffdrs' non-fuel classes WA and NF.
+//
+// That absence needs an active decision from the caller, because the API cannot
+// make it. Every function here takes a fuel code and returns a float64, so an
+// unimplemented fuel comes back as a spread rate of 0 — indistinguishable from a
+// cell that genuinely will not carry fire, and an M3 stand is not that. Screen
+// fuel codes with CanonicalFuelCode where classes enter, once per class rather
+// than once per cell, and decide there what an unimplemented fuel means for the
+// output. Left to the numbers, the answer is 0 and the reason is gone.
+//
 // # Scope
 //
-// Implemented: RSI (initial spread), the buildup effect BE, the slope factor SF,
+// Implemented: CanonicalFuelCode (fuel code folding and validation), RSI
+// (initial spread), the buildup effect BE, the slope factor SF,
 // the Initial Spread Index ISI, the equivalent-wind slope back-solve
 // (EquivalentWind / NetEffectiveWind, giving WSE/WSV/RAZ), ROS, the fire
 // ellipse (LengthToBreadth, BackISIRatio, FlankROS, ROSAtAngle), and the

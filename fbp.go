@@ -34,6 +34,64 @@ var Fuels = map[string]Fuel{
 	"M2":  {"M2", math.NaN(), math.NaN(), math.NaN(), 0.80, 50},
 }
 
+// maxFuelCodeLen bounds the fold buffer in CanonicalFuelCode. The longest key in
+// Fuels is three characters; the headroom is for separators a caller's fold has
+// to strip before the length is known.
+const maxFuelCodeLen = 8
+
+// CanonicalFuelCode folds a fuel code into the spelling Fuels is keyed by, and
+// reports whether the result is a fuel this package actually implements.
+//
+// The fold is case-insensitive and drops spaces, hyphens and underscores, which
+// is what cffdrs does to its FuelType column. So "O1a", "o1b", "C-2" and " C2 "
+// reach the same coefficients as "O1A", "O1B" and "C2". That spelling latitude
+// is not cosmetic: "O1a" and "O1b" are the spellings ST-X-3 itself prints, and a
+// fuel raster labelled the way the source document labels it must not read as a
+// different fuel from one labelled the way this table is keyed.
+//
+// The second return is the part worth calling this for. Every other function
+// here takes a fuel code and returns a float64, so a code this package does not
+// implement can only come back as a spread rate of 0 — which is
+// indistinguishable from a cell that genuinely will not carry fire. Two kinds of
+// input land there, and both are ordinary:
+//
+//   - A typo, or a fuel column from a source whose class names are not FBP's.
+//   - M3 and M4, the dead-balsam-fir mixedwoods. They are real FBP fuels
+//     (Wotton, Alexander & Taylor 2009, eqs. 29-33) and cffdrs implements both;
+//     this package does not, because their percent-dead-fir input PDF has no
+//     home in these signatures. A stand that maps to M3 is not a stand that
+//     does not burn.
+//
+// Call this at the boundary where fuel codes enter — once per class, not once
+// per cell — and decide there what an unimplemented fuel means for your output.
+// Leaving it to the numbers means the answer is 0 and the reason is gone.
+func CanonicalFuelCode(code string) (string, bool) {
+	// The already-canonical path is the hot one, and it neither folds nor
+	// allocates.
+	if _, ok := Fuels[code]; ok {
+		return code, true
+	}
+	var buf [maxFuelCodeLen]byte
+	n := 0
+	for i := 0; i < len(code); i++ {
+		c := code[i]
+		switch {
+		case c == ' ' || c == '\t' || c == '-' || c == '_':
+			continue
+		case c >= 'a' && c <= 'z':
+			c -= 'a' - 'A'
+		}
+		if n == len(buf) {
+			return "", false // longer than any fuel code; it cannot match one
+		}
+		buf[n] = c
+		n++
+	}
+	canonical := string(buf[:n])
+	_, ok := Fuels[canonical]
+	return canonical, ok
+}
+
 // Slope saturation, ST-X-3 eq. 39: SF reaches 10 at 70% rise and is held there.
 // The formula evaluates to 10.0024 at exactly 70%, so the cap is continuous.
 const (
@@ -73,7 +131,17 @@ func CuringFactor(curingPct float64) float64 {
 // RSI is the initial spread rate for a fuel type at a given ISI, in m/min.
 // pc is percent conifer, used only by the M1/M2 blends; curingPct applies only
 // to the O1 grass fuels.
+//
+// The code is folded by CanonicalFuelCode, so case and separators do not matter.
+// A code that survives the fold without naming a fuel this package implements —
+// a typo, or M3/M4, which are real FBP fuels absent here — returns 0, which no
+// caller can tell apart from a cell that will not spread. Check the code with
+// CanonicalFuelCode where fuel classes enter, not here.
 func RSI(code string, isi, pc, curingPct float64) float64 {
+	code, ok := CanonicalFuelCode(code)
+	if !ok {
+		return 0
+	}
 	if code == "M1" || code == "M2" {
 		c2 := rsiBase(Fuels["C2"], isi)
 		d1 := rsiBase(Fuels["D1"], isi)
@@ -84,11 +152,7 @@ func RSI(code string, isi, pc, curingPct float64) float64 {
 		// M2's dead-fir component contributes at 20%.
 		return w*c2 + 0.2*(1-w)*d1
 	}
-	f, ok := Fuels[code]
-	if !ok {
-		return 0
-	}
-	base := rsiBase(f, isi)
+	base := rsiBase(Fuels[code], isi)
 	if code == "O1A" || code == "O1B" {
 		return base * CuringFactor(curingPct)
 	}
@@ -97,9 +161,18 @@ func RSI(code string, isi, pc, curingPct float64) float64 {
 
 // BuildupEffect is BE = exp(50·ln(q)·(1/BUI − 1/BUI0)) (ST-X-3 eq. 54). It is
 // exactly 1.0 at BUI == BUI0, and 1.0 for the grass fuels (q = 1) and BUI <= 0.
+//
+// The code is folded by CanonicalFuelCode. An unimplemented one returns 1 — the
+// identity, so it disappears into the product in ROS rather than zeroing it.
+// That is the same silent case RSI's doc describes and has the same answer:
+// screen fuel codes at the boundary.
 func BuildupEffect(code string, bui float64) float64 {
-	f, ok := Fuels[code]
-	if !ok || bui <= 0 || f.BUI0 <= 0 || f.Q >= 1.0 {
+	canonical, known := CanonicalFuelCode(code)
+	if !known {
+		return 1
+	}
+	f := Fuels[canonical]
+	if bui <= 0 || f.BUI0 <= 0 || f.Q >= 1.0 {
 		return 1
 	}
 	return math.Exp(50 * math.Log(f.Q) * (1/bui - 1/f.BUI0))

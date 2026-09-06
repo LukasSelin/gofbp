@@ -51,12 +51,17 @@ func BackISIRatio(wsvKmh float64) float64 {
 // It is 1.0 at zero wind (a circle) and grows without practical bound with it.
 // Everything about the ellipse's SHAPE is this number; BROS supplies its
 // position along the head axis.
+//
+// The code is folded by CanonicalFuelCode. An unimplemented one takes eq. 79,
+// the wooded form, because that is what every fuel but the two grasses uses —
+// see RSI's doc for why that silent fallback is the caller's to screen for.
 func LengthToBreadth(code string, wsvKmh float64) float64 {
 	if wsvKmh < 0 {
 		wsvKmh = 0
 	}
-	switch code {
-	case "O1a", "O1b", "O1A", "O1B":
+	canonical, _ := CanonicalFuelCode(code)
+	switch canonical {
+	case "O1A", "O1B":
 		// Eq. 80/81. Below 1 km/h the grass form dips under 1.0, which is not a
 		// ratio a fire can have, so the published system pins it.
 		if wsvKmh >= 1.0 {

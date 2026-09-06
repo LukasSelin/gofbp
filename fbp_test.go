@@ -132,6 +132,12 @@ func TestROSFiniteAcrossOperatingRange(t *testing.T) {
 // TestUnknownFuelIsInert guards the API path: a cell whose fuel cannot be
 // determined must yield 0, never NaN, since NaN is a caller's usual no-data
 // sentinel.
+//
+// This is the numeric half of the contract and it is deliberately not the whole
+// of it. 0 is the safe value to return but it is not an informative one — it is
+// what an implemented fuel with no spread returns too. CanonicalFuelCode is what
+// separates the two, and TestUnimplementedFuelIsReportedRatherThanInferred is
+// where that half is asserted.
 func TestUnknownFuelIsInert(t *testing.T) {
 	if got := ROS("nonsense", 10, 60, 100, curingPctForTest, 20); got != 0 {
 		t.Errorf("ROS(unknown fuel) = %v, want 0", got)

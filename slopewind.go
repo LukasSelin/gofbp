@@ -126,7 +126,12 @@ func slopeEquivalentISF(s SlopeWind) (isf float64, clamped bool) {
 	}
 	sf := SlopeFactor(s.SlopePct)
 
-	switch s.Code {
+	code, ok := CanonicalFuelCode(s.Code)
+	if !ok {
+		return 0, false
+	}
+
+	switch code {
 	case "M1", "M2":
 		c2, d1 := Fuels["C2"], Fuels["D1"]
 		w := s.PC / 100
@@ -134,15 +139,12 @@ func slopeEquivalentISF(s SlopeWind) (isf float64, clamped bool) {
 		isfD1, clampD1 := invertRSI(d1, rsiBase(d1, isz)*sf, 1)
 		return w*isfC2 + (1-w)*isfD1, clampC2 || clampD1
 	case "O1A", "O1B":
-		f := Fuels[s.Code]
+		f := Fuels[code]
 		cf := CuringFactor(s.CuringPct)
 		return invertRSI(f, rsiBase(f, isz)*cf*sf, cf)
 	}
 
-	f, ok := Fuels[s.Code]
-	if !ok {
-		return 0, false
-	}
+	f := Fuels[code]
 	return invertRSI(f, rsiBase(f, isz)*sf, 1)
 }
 
