@@ -150,12 +150,20 @@ func TestNetEffectiveWindDependsOnlyOnRelativeAngle(t *testing.T) {
 // Three documented exceptions, all findings rather than conveniences, and all
 // asserted here as inequalities rather than skipped:
 //
-// M1/M2. Eq. 42 blends the ISF of C2 and D1, and blending two inverted ISFs is
-// not the inverse of blending two RSIs, so for mixedwood the identity genuinely
-// does not hold — RSI · BE · SF reads up to 6.5 % high (M2 at 60 % rise, pc 50).
-// This is not our deviation: the fixture's sloped mixedwood rows show cffdrs
-// breaking the identity in exactly the same way, which is what confirmed that
-// slopeEquivalentISF should blend ISF rather than RSF.
+// All four mixedwoods. Eq. 42 blends the ISF of C2 and D1, and blending two
+// inverted ISFs is not the inverse of blending two RSIs, so for mixedwood the
+// identity genuinely does not hold — RSI · BE · SF reads up to 6.5 % high (M2 at
+// 60 % rise, pc 50). This is not our deviation: the fixture's sloped mixedwood
+// rows show cffdrs breaking the identity in exactly the same way, which is what
+// confirmed that slopeEquivalentISF should blend ISF rather than RSF.
+//
+// M3/M4 break it harder, and for a second reason on top of the first. Eqs.
+// 42b/42c reach the pure dead-fir component by forcing PDF to 100, so the ISF
+// being blended is the fuel's own eq. 30 curve at full weight — while the RSI
+// side blends that same curve at the caller's actual PDF, and for M4 also
+// carries a 0.2 on its deciduous half that the slope path drops. The two sides
+// are weighting different things, so the gap is a factor rather than a few per
+// cent. The inequality still holds, which is what this branch asserts.
 //
 // The isfClampMin clamp, where the slope demands more spread than the fuel's RSI
 // curve can deliver.
@@ -174,15 +182,15 @@ func TestNetEffectiveWindDependsOnlyOnRelativeAngle(t *testing.T) {
 func TestZeroWindRecoversRSIxBExSF(t *testing.T) {
 	const bui = 60
 	for _, code := range allFuels() {
-		mixedwood := code == "M1" || code == "M2"
+		mixedwood := code == "M1" || code == "M2" || code == "M3" || code == "M4"
 		for _, ffmc := range []float64{60, 75, 85, 90, 95} {
 			for _, slope := range []float64{5, 15, 30, 45, 60, 69.9, 70, 100, 200} {
 				s := SlopeWind{
 					Code: code, FFMC: ffmc, SlopePct: slope, WindKmh: 0,
-					PC: 100, CuringPct: curingPctForTest,
+					PC: 100, PDF: pdfPctForTest, CuringPct: curingPctForTest,
 				}
 				got, _ := slopeAdjustedROS(s, bui)
-				want := ROS(code, ISI(ffmc, 0), bui, 100, curingPctForTest, slope)
+				want := ROS(code, ISI(ffmc, 0), bui, 100, pdfPctForTest, curingPctForTest, slope)
 				_, clamped := slopeEquivalentISF(s)
 				saturated := EquivalentWind(s) >= EquivalentWindCapKmh
 

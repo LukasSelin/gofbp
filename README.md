@@ -19,9 +19,11 @@ is needed.
 
 ## What this is
 
-ST-X-3 as published: the equations and coefficient tables of the FBP System, with
-no local adaptation, no defaults chosen for a particular country, and no
-judgement about what the ground is made of. That constraint is the point — the
+The FBP System as published: ST-X-3's equations and coefficient tables, plus the
+revisions the Canadian Forest Service published in 2009 (the grass curing
+function, and the M3/M4 dead-balsam-fir mixedwoods) — with no local adaptation,
+no defaults chosen for a particular country, and no judgement about what the
+ground is made of. That constraint is the point — the
 claim "this is the Canadian FBP System, unmodified" is only checkable if the
 package making it contains nothing else.
 
@@ -72,7 +74,9 @@ s := fbp.SlopeWind{
 	WindKmh:           15,                              // km/h, not m/s
 	WindAzimuthDeg:    45,                              // the wind pushes towards NE
 	UpslopeAzimuthDeg: 45,                              // the ground rises towards NE
-	PC:                100,
+	PC:                100,                             // percent conifer; M1/M2 only
+	// PDF (percent dead balsam fir, M3/M4 only) and CuringPct (O1A/O1B only)
+	// are left at zero: C2 ignores both.
 }
 const bui = 80
 
@@ -82,10 +86,10 @@ wsv, raz := fbp.NetEffectiveWind(s)
 
 // The head rate. slopePct is 0 on purpose: the slope is already inside wsv.
 isi := fbp.ISI(s.FFMC, wsv)
-head := fbp.ROS(s.Code, isi, bui, s.PC, s.CuringPct, 0)
+head := fbp.ROS(s.Code, isi, bui, s.PC, s.PDF, s.CuringPct, 0)
 
 // The ellipse, for "how fast is this coming at something due east of me".
-back := fbp.ROS(s.Code, isi*fbp.BackISIRatio(wsv), bui, s.PC, s.CuringPct, 0)
+back := fbp.ROS(s.Code, isi*fbp.BackISIRatio(wsv), bui, s.PC, s.PDF, s.CuringPct, 0)
 lb := fbp.LengthToBreadth(s.Code, wsv)
 flank := fbp.FlankROS(head, back, lb)
 east := fbp.ROSAtAngle(head, flank, back, fbp.AngleBetweenDeg(raz, 90))
@@ -107,8 +111,9 @@ rate alone is the wrong number for "how fast is this coming at *me*". See
 
 - `CanonicalFuelCode` — folds a fuel code to the table's spelling and says
   whether the fuel is implemented; see [Fuel codes](#fuel-codes)
-- `RSI` — initial spread rate, all 15 ST-X-3 fuel types, including the M1/M2
-  percent-conifer blends and the O1 grass curing factor
+- `RSI` — initial spread rate, all 17 fuel types, including the M1/M2
+  percent-conifer blends, the M3/M4 percent-dead-balsam-fir blends and the O1
+  grass curing factor
 - `BuildupEffect` (BE), `SlopeFactor` (SF), `SlopePercentFromDegrees`
 - `ISI` — the FWI System's Initial Spread Index with FBP's high-wind wind
   function
@@ -121,27 +126,42 @@ rate alone is the wrong number for "how fast is this coming at *me*". See
 
 ## Fuel codes
 
-Implemented: `C1`–`C7`, `D1`, `M1`, `M2`, `S1`–`S3`, `O1A`, `O1B` — the fifteen
-fuel types of ST-X-3. Case and separators do not matter, so `O1a`, `o1b` and
-`C-2` reach the same coefficients as `O1A`, `O1B` and `C2`. The lowercase grass
-spellings are the ones ST-X-3 itself prints, and a raster labelled the way the
-source document labels it must not read as a different fuel.
+Implemented: `C1`–`C7`, `D1`, `M1`–`M4`, `S1`–`S3`, `O1A`, `O1B` — the fifteen
+fuel types of ST-X-3 plus `M3` and `M4`, the dead-balsam-fir mixedwoods from the
+2009 revision. That is every fuel `cffdrs` implements.
 
-**M3 and M4 are not implemented.** They are real FBP fuels — the dead-balsam-fir
-mixedwoods from the 2009 revision — and `cffdrs` has both. They need a
-percent-dead-fir input `PDF` that has no home in these signatures. `cffdrs`'s
-non-fuel classes `WA` and `NF` are absent too.
+Case and separators do not matter, so `O1a`, `o1b` and `C-2` reach the same
+coefficients as `O1A`, `O1B` and `C2`. The lowercase grass spellings are the ones
+ST-X-3 itself prints, and a raster labelled the way the source document labels it
+must not read as a different fuel.
 
-That absence needs a decision from you, because the API cannot make it for you.
-Every function here returns a `float64`, so an unimplemented fuel arrives as a
-spread rate of **0** — which is exactly what a cell that will not carry fire
-returns. An M3 stand is not a cell that will not carry fire. `CanonicalFuelCode`
-is the only thing that tells the two apart:
+### The two mixedwood blends take different inputs
+
+| Fuel | Weighted by | Against | Equation |
+|---|---|---|---|
+| `M1`, `M2` | `pc` — percent conifer | the C2 curve | eq. 27 |
+| `M3`, `M4` | `pdf` — percent dead balsam fir | the fuel's own eq. 30 curve | eqs. 29, 33 |
+
+They are **not interchangeable**. Both are "how much of this stand is the
+flammable component" and both are percentages, which is exactly why they are
+separate parameters rather than one — a fuel map carrying both carries them in
+different columns, and a single parameter serving both would turn a transposed
+column into a plausible number instead of a compile error. `M2` and `M4` each
+carry a 0.2 weight on their deciduous half; `M1` and `M3` do not.
+
+### Not implemented
+
+`D2`, and `cffdrs`'s non-fuel classes `WA` and `NF`.
+
+That needs a decision from you, because the API cannot make it for you. Every
+function here returns a `float64`, so an unimplemented fuel arrives as a spread
+rate of **0** — which is exactly what a cell that will not carry fire returns.
+`CanonicalFuelCode` is the only thing that tells the two apart:
 
 ```go
 code, ok := fbp.CanonicalFuelCode(rasterClass)
 if !ok {
-	// A typo, a non-FBP class name, or M3/M4. Decide here — not downstream,
+	// A typo, a non-FBP class name, or D2. Decide here — not downstream,
 	// where it is a zero with no reason attached.
 	return fmt.Errorf("fuel %q is not implemented", rasterClass)
 }
@@ -159,7 +179,7 @@ intermittent crown, continuous crown.
 It does **not** change any spread rate, and that is the published system's own
 behaviour rather than a shortcut. In FBP the final rate of spread is the surface
 rate for every fuel type except C6, which alone has a separate crown rate of
-spread blended in through CFB. So for fourteen of the fifteen fuels the spread
+spread blended in through CFB. So for sixteen of the seventeen fuels the spread
 rate was already right; what was missing was the statement of what kind of fire
 it describes.
 
@@ -182,9 +202,9 @@ factor — up to tenfold, straight into an exponential.
 
 ## What is not implemented
 
-**M3 and M4, and the `PDF` input they need.** See [Fuel codes](#fuel-codes) —
-this is the gap most likely to reach a caller as a plausible number, because an
-unimplemented fuel comes back as a spread rate of zero.
+**D2, and the non-fuel classes WA and NF.** See [Fuel codes](#fuel-codes) — an
+unimplemented fuel comes back as a spread rate of zero, so screen codes with
+`CanonicalFuelCode` rather than reading the number.
 
 **Crown-fire inputs and the per-fuel crown tables.** FMC (from latitude,
 longitude, elevation and date), SFC (from FFMC and BUI per fuel), and the
@@ -227,7 +247,7 @@ steep dry ground.
 The slope is already inside `WSV`; passing it again counts it twice.
 
 At zero wind the two paths usually agree exactly. Two exceptions, neither exotic:
-M1/M2 never satisfy it (eq. 42 blends ISF, not RSF), and neither does any fuel
+no mixedwood satisfies it (eqs. 42/42b/42c blend ISF, not RSF), and neither does any fuel
 where the RSI clamp or the equivalent-wind cap binds — which on dry steep ground
 is most of them. Both leave `ROS` reading high.
 
@@ -239,7 +259,7 @@ package against [cffdrs](https://cran.r-project.org/package=cffdrs), maintained
 by the Canadian Forest Service authors of the FBP System — the only oracle that
 can say the tables are *right* rather than merely self-consistent.
 
-RSI, BE and SF reproduce it exactly across all 15 fuel types. ISI, WSV and the
+RSI, BE and SF reproduce it exactly across all 17 fuel types. ISI, WSV and the
 full slope path reproduce it to machine precision over every sloped case.
 
 It has earned that twice:

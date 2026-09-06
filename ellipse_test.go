@@ -52,7 +52,7 @@ func TestCFFDRSBackROS(t *testing.T) {
 		fuel := ourFuel(c.Fuel)
 		perFuel[fuel]++
 		bisi := c.ISI * BackISIRatio(c.WSV)
-		got := ROS(fuel, bisi, c.BUI, c.PC, c.CC, 0)
+		got := ROS(fuel, bisi, c.BUI, c.PC, c.PDF, c.CC, 0)
 		if !closeEnough(got, c.BROS, tol) {
 			bad[fuel]++
 			if shown++; shown <= 15 {
