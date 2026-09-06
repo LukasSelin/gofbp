@@ -29,7 +29,7 @@
 #
 # The first Docker run builds the image and takes a while -- an R toolchain plus
 # GDAL. After that it is cached and a regeneration is seconds. The sweep itself is
-# ~11500 cases through cffdrs::fbp() and is not the slow part.
+# ~18400 cases through cffdrs::fbp() and is not the slow part.
 set -euo pipefail
 
 R_VERSION="${CFFDRS_R_VERSION:-4.6.1}"

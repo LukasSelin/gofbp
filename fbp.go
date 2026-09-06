@@ -130,7 +130,7 @@ func SlopeFactor(slopePct float64) float64 {
 //
 // This is NOT the published slope path. Slope enters here as a multiplier, so it
 // applies whole regardless of wind direction, and the result is an upper bound
-// wherever wind is not blowing uphill (median 5.04x, worst 99x with wind opposing
+// wherever wind is not blowing uphill (median 2.98x, worst 99x with wind opposing
 // the slope; see the package doc and TestCFFDRSSlopeDivergence). It never
 // under-estimates.
 //

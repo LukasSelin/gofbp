@@ -46,7 +46,7 @@ func TestCFFDRSBackROS(t *testing.T) {
 	perFuel, bad := map[string]int{}, map[string]int{}
 	shown := 0
 	for i, c := range f.Cases {
-		if c.GS != 0 || c.CFB != 0 {
+		if c.GS != 0 || crownChangesROS(c) {
 			continue
 		}
 		fuel := ourFuel(c.Fuel)
