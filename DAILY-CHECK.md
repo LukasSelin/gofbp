@@ -55,6 +55,10 @@ Walk `MIGRATION.md` top to bottom:
 
 ## 5. Move one thing (the rest of the day)
 
+`/migration-port` walks this step in detail — the oracle-column decision, the
+two sources to read, and what closing out means. Use it rather than the summary
+here when you are actually porting.
+
 - [ ] Take the **top unblocked 🔴** from "Concepts still missing, in dependency order". Do not skip down the list because something lower looks easier — the order is a dependency order, and porting out of it produces code the oracle cannot check yet.
 - [ ] Port it. Transcribe from the ST-X-3 equations *and* read the R, and note where the R disagrees with the published paper — that disagreement is usually a documented revision, and occasionally it is the bug.
 - [ ] Add the fixture column to `testdata/gen_cffdrs_reference.R`, regenerate, and write the `TestCFFDRS*` before you call it done. A port with no oracle column is a 🟢 at best, and only if you can say why no column can exist.
