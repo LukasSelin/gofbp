@@ -18,7 +18,7 @@ is right. Only the fixture can tell them apart.
 
 - [ ] `git fetch && git status` — clean tree, know what branch you are on.
 - [ ] `go test ./...` — green before you touch anything. If it is red, stop; today's job is that.
-- [ ] Note how many `TestCFFDRS*` tests **skipped**. All fifteen skipping means you have no fixture, so nothing you conclude today about coefficients is backed by anything.
+- [ ] Note how many `TestCFFDRS*` tests **skipped**. All twelve skipping means you have no fixture, so nothing you conclude today about coefficients is backed by anything.
 
 ## 2. Upstream drift (3 min)
 

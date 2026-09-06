@@ -18,13 +18,19 @@ that says the coefficients are *right* rather than merely self-consistent.
 | Upstream commit last read | `4d20a30` (2026-05-11) | 2026-09-06 |
 | Upstream package version | 1.10.0 | 2026-09-06 |
 | Oracle pins (`testdata/Dockerfile`) | cffdrs 1.9.2, R 4.6.1 | 2026-09-06 |
-| Fixture sha256 | `12b9a009…89a7f` (`testdata/README.md`) | 2026-09-06 |
+| Fixture sha256 | `148a5a9e…24cf8f` (`testdata/README.md`) | 2026-09-06 |
 
 > **Open drift:** the oracle pins 1.9.2, upstream is 1.10.0. `4d20a30` changes
 > foliar moisture content handling and adds `D0` to `fbp()`'s output. gofbp does
 > not implement FMC, so nothing here is *wrong* today — but the FMC row below
 > must be ported against 1.10.0's behaviour, not 1.9.2's, and the bump has to be
 > a deliberate reviewed step (regenerate, read the diff, record the new digest).
+
+> **Open question (needs a decision, not a daily check):** the `direction.r` row
+> below claims an equivalence that does not hold. The honest placement is ⚪,
+> alongside the `lros.r`/`pros.r` rows whose helper it is, with `AngleBetweenDeg`
+> recorded as gofbp's own helper rather than a port of anything. That is a move out
+> of scope, so it is left for a human to make deliberately.
 
 ## Status key
 
@@ -40,7 +46,7 @@ that says the coefficients are *right* rather than merely self-consistent.
 
 | Upstream file | Concept | Status | gofbp |
 |---|---|---|---|
-| `rate_of_spread.r` | RSI, all 15 fuel types; M1/M2 PC blend; O1 curing | ✅ | `fbp.go` `RSI` |
+| `rate_of_spread.r` | RSI, all 17 fuel types; M1/M2 PC and M3/M4 PDF blends; O1 curing | ✅ | `fbp.go` `RSI` |
 | `buildup_effect.r` | BE | ✅ | `fbp.go` `BuildupEffect` |
 | `Slopecalc.r` | WSE/WSV/RAZ slope back-solve, SF | ✅ | `slopewind.go` |
 | `initial_spread_index.r` | ISI with FBP's high-wind wind function | ✅ | `fbp.go` `ISI` |
@@ -49,7 +55,7 @@ that says the coefficients are *right* rather than merely self-consistent.
 | `flank_rate_of_spread.r` | FROS | ✅ | `ellipse.go` `FlankROS` |
 | `CFBcalc.r` | CSI, RSO, CFB, FD | ✅ | `crown.go` |
 | `rate_of_spread_at_theta.r` | ROS at an arbitrary bearing | 🟢 | `ellipse.go` `ROSAtAngle` — `fbp()` returns ellipse parameters, not a rate at a bearing, so there is no column to assert against. Pinned by exact identities at 0°/180° plus a shape assertion. |
-| `direction.r` | signed angle between two bearings | 🟢 | `ellipse.go` `AngleBetweenDeg` — **verify the equivalence is real**, not assumed; upstream's helper and ours were written for different call sites. |
+| `direction.r` | `.direction(bearingT1T2, bearingT1T3, ThetaAdeg)` — rotates a bearing by an offset, with quadrant handling; signed, roughly [-180, 180] | 🟢 | `ellipse.go` `AngleBetweenDeg` — **the equivalence was checked on 2026-09-06 and it is not real.** Upstream takes three arguments and rotates one bearing by an offset; ours takes two and returns their unsigned separation in [0, 180]. `.direction` is a helper of `pros()`/`lros()`, which are ⚪ below, so it has no caller on the FBP forward path at all. `AngleBetweenDeg` is a gofbp convenience with no upstream counterpart, asserted by `TestAngleBetweenDeg`. Reclassifying this row is a scope call — see the open question above. |
 | `foliar_moisture_content.r`, `foliar_moisture_content_minimum.r` | FMC from lat/long/elev/date | 🔴 | — Caller must supply `Crown.FMC`. Port against 1.10.0, which reshaped this and added `D0`. |
 | `surface_fuel_consumption.r` | SFC per fuel from FFMC/BUI | 🔴 | — Caller must supply `Crown.SFC`. Blocks a self-contained crown path. |
 | `crown_base_height.r` | per-fuel CBH defaults | 🔴 | — Caller must supply `Crown.CBH`. |
@@ -71,7 +77,7 @@ that says the coefficients are *right* rather than merely self-consistent.
 | Upstream | Status | Note |
 |---|---|---|
 | `data/` | 🟡 | Fuel-type tables. gofbp transcribed the ST-X-3 tables by hand and checks them against the fixture. The CBH/CFL defaults living here are the 🔴 rows above. |
-| `tests/` | 🟡 | Not mirrored. gofbp asserts against a generated ~18400-case sweep instead (`testdata/gen_cffdrs_reference.R`). Upstream's own test cases are still worth reading for edge cases the sweep does not reach. |
+| `tests/` | 🟡 | Not mirrored. gofbp asserts against a generated ~23500-case sweep instead (`testdata/gen_cffdrs_reference.R`). Upstream's own test cases are still worth reading for edge cases the sweep does not reach. |
 | `man/`, `inst/` | ⚪ | Docs and package metadata. |
 | `NEWS.md` | — | **Read on every version bump.** It is the cheapest signal that a coefficient moved. |
 
@@ -100,4 +106,5 @@ gap in the dates is visible as a gap.
 
 | Date | Upstream commit | What changed |
 |---|---|---|
+| 2026-09-06 | `4d20a30` | Upstream unchanged (HEAD still `4d20a30`); no port. Audit found three stale claims and fixed them: the fixture digest still named the pre-M3/M4 sweep (regenerated from the pinned container, byte-identical, `148a5a9e…24cf8f`), the `rate_of_spread.r` row still said 15 fuel types, and the sweep is ~23500 cases, not ~18400. Checked the `direction.r` equivalence the row asked about: it does not hold. |
 | 2026-09-06 | `4d20a30` | Ledger created. Full `R/` inventory taken against upstream 1.10.0; oracle-vs-upstream version drift recorded as an open item. |
