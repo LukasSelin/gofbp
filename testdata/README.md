@@ -1,12 +1,12 @@
 # The cffdrs oracle fixture
 
-`cffdrs.json` is a sweep of ~23500 FBP cases and what the reference
+`cffdrs.json` is a sweep of 23,532 FBP cases and what the reference
 implementation produces for each. Every `TestCFFDRS*` in the package asserts
 against it. It is not in this repository, and it is not supposed to be.
 
 ## Why it is not committed
 
-The fixture is 9.5 MB of numbers produced by running
+The fixture is 10.9 MB of numbers produced by running
 [cffdrs](https://cran.r-project.org/package=cffdrs), the Canadian Forest
 Service's own R implementation of the FBP System. cffdrs is **GPL-2**. This
 repository is MIT.
@@ -39,15 +39,25 @@ sha256  148a5a9e0cbb2c379b9ae4e286ec0e21842a36245fe1173e22da6f4d0e24cf8f
 ```
 
 Earlier digests are kept so a stale local fixture identifies itself instead of
-failing obscurely:
+failing obscurely. Newest first:
 
-- `12b9a009c2adfdd482e4d6e2c99ef4fbf11b6ebb59cf14ad46f856e4d8889a7f` — recorded
-  before M3/M4 were added to `gen_cffdrs_reference.R`. ~18400 cases, no `M3` or
-  `M4` rows, so `TestCFFDRSSlopeBackSolve` logs loudly rather than asserting the
-  eq. 42b/42c readings.
-- `612ef1524d12aa00907b60b1f549d555e3264d613cd0e18d2ea5e1819f421058` — recorded
-  before the crown-fire sweep was added. ~11500 cases with no `cbh`, `cfl`,
-  `fmc`, `sfc`, `csi` or `rso` columns.
+| sha256 | cases | recorded before |
+|---|---|---|
+| `12b9a009…89a7f` | 20716 | the M3/M4 mixedwoods (`8b0cf01`), which took `PDF_VALUES` from three values to five, split the M1/M2 and M3/M4 sweeps because they take different blend inputs, and added M3/M4 to the slope block. It has no `M3` or `M4` rows at all, so `TestCFFDRSSlopeBackSolve` logs loudly rather than asserting the eq. 42b/42c readings |
+| `612ef152…21058` | ~11500 | the crown-fire sweep, so it carries no `cbh`, `cfl`, `fmc`, `sfc`, `csi` or `rso` columns |
+
+**The move from `12b9a009` to `148a5a9e` moved no reference number.** That was
+verified rather than assumed, because the digest had simply not been re-recorded
+when `8b0cf01` grew the sweep. The pre-M3/M4 generator was checked out and rerun
+at these same pins — reproducing `12b9a009` byte for byte, which is what makes
+the rest of this trustworthy — and the two fixtures compared with
+`tools/fixture-diff`. All fourteen output columns agree across the 18804 cases
+the sweeps share. The difference is entirely 4584 added M3/M4 rows and 1800
+removed M2 rows that `8b0cf01` identified as duplicates of rows already present.
+
+One property worth knowing: 144 of those cases are emitted twice, because the
+slope block repeats the flat block at `gs = 0`. They are exact duplicates in both
+inputs and outputs, so they cost a little time and nothing else.
 
 ## What happens without it
 
@@ -70,4 +80,16 @@ Both pinned versions are recorded *into* the fixture (`cffdrs_version`,
 drift announces itself rather than silently moving several thousand numbers.
 
 A changed reference number is the oracle telling you something, not noise to be
-committed past. Read the diff.
+committed past. Read the diff — with `tools/fixture-diff`, not with your eyes:
+
+```
+cp testdata/cffdrs.json /tmp/cffdrs.old.json
+./testdata/regen-cffdrs.sh
+go run ./tools/fixture-diff /tmp/cffdrs.old.json testdata/cffdrs.json
+```
+
+It keys cases by their inputs rather than by row order, so a widened sweep is not
+a diff; it reports per column whether anything moved, by how much, and in which
+cases; and it exits non-zero when something did. Adding a column to the generator
+should print `No column shared by both fixtures moved.` — if it prints anything
+else, that is the finding, and it belongs in the PR.

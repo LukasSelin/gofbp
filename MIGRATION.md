@@ -77,27 +77,35 @@ that says the coefficients are *right* rather than merely self-consistent.
 | Upstream | Status | Note |
 |---|---|---|
 | `data/` | 🟡 | Fuel-type tables. gofbp transcribed the ST-X-3 tables by hand and checks them against the fixture. The CBH/CFL defaults living here are the 🔴 rows above. |
-| `tests/` | 🟡 | Not mirrored. gofbp asserts against a generated ~23500-case sweep instead (`testdata/gen_cffdrs_reference.R`). Upstream's own test cases are still worth reading for edge cases the sweep does not reach. |
+| `tests/` | 🟡 | Not mirrored. gofbp asserts against a generated 23,532-case sweep instead (`testdata/gen_cffdrs_reference.R`). Upstream's own test cases are still worth reading for edge cases the sweep does not reach. |
 | `man/`, `inst/` | ⚪ | Docs and package metadata. |
 | `NEWS.md` | — | **Read on every version bump.** It is the cheapest signal that a coefficient moved. |
 
 ## Concepts still missing, in dependency order
 
 The 🔴 rows are not independent. Doing them out of order means writing code that
-cannot be oracle-tested yet:
+cannot be oracle-tested yet.
 
-1. **SFC** — unlocks TFC, then HFI, and makes `Crown` usable without the caller
-   supplying `SFC` by hand.
-2. **FMC** (against 1.10.0, including `D0`) — the other `Crown` input a caller
-   currently has to invent.
-3. **CBH / CFL defaults** — per-fuel tables; small, and the last thing standing
-   between `Crown` and a fuel-code-only call.
-4. **C6 RSC** — removes the exclusion that every oracle test currently carries.
-   Do not attempt before CBH/CFL land; C6's ROS *is* the CFB blend.
-5. **TFC, HFI** — mechanical once SFC exists.
-6. **Acceleration model** — the largest remaining block, and the only one that
-   changes the package's shape (it introduces time).
-7. **An `fbp()`-shaped driver** — last, or never. See the row above.
+Each item names the upstream file its row is keyed on, because `TestLedger…` in
+`ledger_test.go` joins this list to the table above on exactly that name — every
+🔴 row has to appear here, and nothing may appear here that is not still owed.
+
+1. **SFC** (`surface_fuel_consumption.r`) — unlocks TFC, then HFI, and makes
+   `Crown` usable without the caller supplying `SFC` by hand.
+2. **FMC** (`foliar_moisture_content.r`, against 1.10.0 and including `D0`) — the
+   other `Crown` input a caller currently has to invent.
+3. **CBH / CFL defaults** (`crown_base_height.r`, `crown_fuel_load.r`) — per-fuel
+   tables; small, and the last thing standing between `Crown` and a
+   fuel-code-only call.
+4. **C6 RSC** (`C6calc.r`) — removes the exclusion that every oracle test
+   currently carries. Do not attempt before CBH/CFL land; C6's ROS *is* the CFB
+   blend.
+5. **TFC, HFI** (`total_fuel_consumption.r`, `fire_intensity.r`) — mechanical
+   once SFC exists.
+6. **Acceleration model** (`rate_of_spread_at_time.r`, `distance_at_time.r`,
+   `length_to_breadth_at_time.r`) — the largest remaining block, and the only one
+   that changes the package's shape (it introduces time).
+7. **An `fbp()`-shaped driver** (`fbp.r`) — last, or never. See the row above.
 
 ## Log
 
@@ -106,5 +114,6 @@ gap in the dates is visible as a gap.
 
 | Date | Upstream commit | What changed |
 |---|---|---|
+| 2026-09-06 | `4d20a30` | No upstream change; no port. Turned the mechanical half of this procedure into code: `ledger_test.go` for the step-4 sweep, and `tools/precheck`, `tools/upstream-drift`, `tools/fixture-diff` for the gate, the upstream join and the reference-number diff. The digest re-baseline below was re-derived independently here and reached the same `148a5a9e…`; `tools/fixture-diff` against a rebuilt pre-M3/M4 fixture then showed no reference number moved, across the 18804 cases the two sweeps share. Sweep is 23,532 cases exactly. |
 | 2026-09-06 | `4d20a30` | Upstream unchanged (HEAD still `4d20a30`); no port. Audit found three stale claims and fixed them: the fixture digest still named the pre-M3/M4 sweep (regenerated from the pinned container, byte-identical, `148a5a9e…24cf8f`), the `rate_of_spread.r` row still said 15 fuel types, and the sweep is ~23500 cases, not ~18400. Checked the `direction.r` equivalence the row asked about: it does not hold. |
 | 2026-09-06 | `4d20a30` | Ledger created. Full `R/` inventory taken against upstream 1.10.0; oracle-vs-upstream version drift recorded as an open item. |

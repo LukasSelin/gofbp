@@ -2,7 +2,7 @@
 # Session setup for gofbp. Runs before Claude Code launches, on a fresh
 # environment, and its one real job is to make the oracle available.
 #
-# Without testdata/cffdrs.json the fifteen TestCFFDRS* tests skip, and a session
+# Without testdata/cffdrs.json the twelve TestCFFDRS* tests skip, and a session
 # that cannot run them cannot say whether a coefficient is right -- only whether
 # it is self-consistent. Both /migration-check and /migration-port treat that as
 # a precondition and refuse to port through it, so an environment without the
@@ -82,32 +82,25 @@ else
 fi
 
 # --- 3. say plainly what this session can and cannot claim ------------------
+#
+# tools/precheck is the authority on this, not the shell. It hashes the fixture,
+# reads the versions recorded INTO it, compares both against the ledger's pins,
+# runs the tests and counts the TestCFFDRS* skips -- and it is the same gate the
+# two migration commands run before they start, so a session cannot be told one
+# thing here and another there. Its exit status: 0 ready, 1 audit-only, 2 the
+# tests are red.
 
 echo
-say "--------------------------------------------------------------"
-
-if [ -f "$FIXTURE" ]; then
-	got="$(sha256sum "$FIXTURE" 2>/dev/null | cut -d' ' -f1)"
-	want="$(grep -oE '^sha256  [0-9a-f]{64}$' "$REPO/testdata/README.md" 2>/dev/null | head -1 | awk '{print $2}')"
-	say "fixture: $(wc -c <"$FIXTURE" | tr -d ' ') bytes"
-	say "  sha256   $got"
-	if [ -n "$want" ] && [ "$got" = "$want" ]; then
-		say "  matches the digest recorded in testdata/README.md"
-	elif [ -n "$want" ]; then
-		warn "digest differs from testdata/README.md ($want)."
-		warn "  Expected if R here is not $R_PIN -- the R version is recorded INTO"
-		warn "  the fixture. NOT expected if cffdrs is $CFFDRS_PIN and R matches:"
-		warn "  then the reference numbers moved, and that is a finding, not noise."
-	fi
-else
-	warn "no fixture. The TestCFFDRS* tests will skip, so this session can read"
-	warn "  and audit the ledger but must NOT port a coefficient -- see"
-	warn "  DAILY-CHECK.md. Both migration commands check this before starting."
-fi
-
 if command -v go >/dev/null 2>&1; then
-	skipped="$(cd "$REPO" && go test . -run TestCFFDRS -v 2>/dev/null | grep -c '^--- SKIP')"
-	say "TestCFFDRS* skipping: ${skipped:-unknown} of 15"
+	go run ./tools/precheck -mode port
+	case $? in
+	0) say "this session can port a coefficient" ;;
+	1) warn "this session is AUDIT ONLY -- see the blockers above" ;;
+	2) warn "the tests are red; that is this session's job" ;;
+	*) warn "precheck could not answer" ;;
+	esac
+else
+	warn "no go, so nothing here can be built, tested or checked"
 fi
 
 say "--------------------------------------------------------------"

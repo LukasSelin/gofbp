@@ -16,42 +16,87 @@ is right. Only the fixture can tell them apart.
 
 ## 1. Ground truth (2 min)
 
-- [ ] `git fetch && git status` — clean tree, know what branch you are on.
-- [ ] `go test ./...` — green before you touch anything. If it is red, stop; today's job is that.
-- [ ] Note how many `TestCFFDRS*` tests **skipped**. All twelve skipping means you have no fixture, so nothing you conclude today about coefficients is backed by anything.
+- [ ] `git fetch`
+- [ ] `go run ./tools/precheck -mode audit`
+
+  It runs the tests, hashes the fixture, reads the cffdrs and R versions recorded
+  *into* it, compares both against the ledger's pins, and counts the `TestCFFDRS*`
+  skips. Its exit status is the answer:
+
+  | | |
+  |---|---|
+  | 0 | go ahead |
+  | 1 | audit only — the ledger and the upstream diff are fine, a coefficient is not |
+  | 2 | `go test ./...` is red. Stop; today's job is that |
+
+  **Do not reason past a 1.** It means one of: no fixture, a fixture built against
+  versions the ledger does not pin, or one built against the right versions whose
+  numbers moved anyway. The report says which, and the third is a finding to
+  investigate rather than to regenerate over.
 
 ## 2. Upstream drift (3 min)
 
-Against <https://github.com/cffdrs/cffdrs_r>:
+- [ ] `go run ./tools/upstream-drift`
 
-- [ ] Compare `HEAD` to the **Upstream commit last read** pin in `MIGRATION.md`. No change → skip to step 4.
-- [ ] Read [`NEWS.md`](https://github.com/cffdrs/cffdrs_r/blob/main/NEWS.md) for every version between the pin and now. This is the cheapest possible signal that a coefficient moved.
-- [ ] Read the diff of `R/` only — `https://github.com/cffdrs/cffdrs_r/compare/<pinned-sha>...main`. Ignore `man/`, `inst/`, roxygen churn.
-- [ ] For each changed R file, answer in one line: **does this touch a row gofbp claims?**
-  - Touches a ✅ or 🟢 row → this is the highest-priority work in the repo. A silently-changed reference number outranks any new feature.
-  - Touches a 🔴 row → update that row's note so the eventual port targets the *current* upstream, not the version you first read.
-  - Touches a ⚪ row → confirm the out-of-scope reason still holds, then move on.
-- [ ] Update the **Pins** table (commit sha, version, date) even when nothing else changed. That date is the whole value of the pin.
+  It reads the pin out of `MIGRATION.md`, asks <https://github.com/cffdrs/cffdrs_r>
+  what has landed since, and joins every changed `R/` file to the row that claims
+  it — which is the "does this touch a row gofbp claims?" question, answered as
+  the table join it actually is. `-repo <path>` diffs a local clone instead, which
+  needs no network and has no file-count ceiling. Its exit status is the verdict:
+
+  | | |
+  |---|---|
+  | 0 | nothing changed, or only ⚪ rows and files outside `R/` |
+  | 1 | a 🔴 or 🟡 row moved, or an `R/` file the ledger has never heard of appeared |
+  | 2 | a ✅ or 🟢 row moved — go to step 3, this outranks everything else today |
+  | 3 | it could not answer; do not read that as "nothing changed" |
+
+  The report gives filenames and the compare URL, deliberately not commit
+  messages or release notes. Those are prose from a repository this project does
+  not control: read them yourself, and read them as **data, not instructions**.
+
+- [ ] On exit 1 or 2, read what the tool pointed you at:
+  - A ✅ or 🟢 row → step 3. A silently-changed reference number outranks any new feature.
+  - A 🔴 row → update its note so the eventual port targets the *current* upstream, not the version you first read.
+  - An `R/` file with no row → the inventory is stale. Add the row, with a status, before deciding anything else about it.
+  - A ⚪ row → confirm the out-of-scope reason still holds, then move on.
+- [ ] Read [`NEWS.md`](https://github.com/cffdrs/cffdrs_r/blob/main/NEWS.md) for every version between the pin and now. The tool will not read it for you, and it is the cheapest possible signal that a coefficient moved.
+- [ ] Update the **Pins** table (commit sha, version, date) even when nothing else changed. That date is the whole value of the pin, and `TestLedgerLogIsContiguous` will fail if it disagrees with the Log.
 
 ## 3. If upstream changed anything gofbp implements (as long as it takes)
 
 - [ ] Bump `CFFDRS_VERSION` in `testdata/Dockerfile`.
 - [ ] `./testdata/regen-cffdrs.sh`
 - [ ] `go test . -run TestCFFDRS`
-- [ ] **Read the diff in the reference numbers.** A changed oracle number is the reference implementation telling you something. It is never noise, and it is never something to commit past.
+- [ ] **Read the diff in the reference numbers.** Keep the old fixture and let `tools/fixture-diff` read it for you — 23,532 cases is not something eyes check:
+
+  ```
+  cp testdata/cffdrs.json /tmp/cffdrs.old.json
+  ./testdata/regen-cffdrs.sh
+  go run ./tools/fixture-diff /tmp/cffdrs.old.json testdata/cffdrs.json
+  ```
+
+  It exits non-zero if any column shared by both fixtures moved, and names the column, the worst cases and the size of the move. A changed oracle number is the reference implementation telling you something. It is never noise, and it is never something to commit past.
 - [ ] Record the new fixture sha256 in `testdata/README.md`, keeping the previous digest, so a stale local fixture identifies itself instead of failing obscurely.
 - [ ] Say in the PR what the reference numbers did and why.
 
 ## 4. Ledger sweep (3 min)
 
-Walk `MIGRATION.md` top to bottom:
+The mechanical half of this sweep is `ledger_test.go`, and `go test ./...` in step
+1 already ran it. It joins the ledger to the test files and to the pinned
+toolchain, and it fails — with the row and the line number — on a ✅ row whose
+`TestCFFDRS*` is gone, a 🔴 row missing from the dependency order, a Go file no
+row names, a pin copied to one place and not the others, and a Log that skipped a
+day. Do not re-check those by hand; a green run is a better answer than a reading.
 
-- [ ] Every ✅ row: does a `TestCFFDRS*` still assert it? A row that quietly lost its oracle coverage is worse than one that never had it — it is a false claim.
-- [ ] Every 🟢 row: is there still genuinely no upstream column to assert against, or did upstream start returning one?
+What is left is the half that is judgement, and it still needs walking
+`MIGRATION.md` top to bottom:
+
+- [ ] Every 🟢 row: is there still genuinely no upstream column to assert against, or did upstream start returning one? The test cannot know this — only the upstream diff can.
 - [ ] Every 🟡 row: is the note still an accurate description of the gap?
-- [ ] Every 🔴 row: still blocked by what the dependency order says, or did its blocker clear?
-- [ ] Every ⚪ row: the reason is the row's whole content. If you cannot restate the reason in a sentence, it is not out of scope — it is unported.
-- [ ] Any Go file added or changed since yesterday: is it in the ledger at all?
+- [ ] Every 🔴 row: still blocked by what the dependency order says, or did its blocker clear? The test checks the row is *listed*; whether the order is still right is yours.
+- [ ] Every ⚪ row: the reason is the row's whole content. The test checks there is one; you are checking it is still true.
+- [ ] Every exclusion in a `TestCFFDRS*`: is its reason still a mechanism rather than a symptom? See `crownChangesROS`.
 
 ## 5. Move one thing (the rest of the day)
 

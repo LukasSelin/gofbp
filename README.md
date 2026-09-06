@@ -281,7 +281,7 @@ It has earned that twice:
 returns the ellipse's parameters, not a rate at an arbitrary bearing — so it is
 pinned by exact identities at 0° and 180° plus a shape assertion instead.
 
-**The `Go` workflow does not run the oracle.** The 9.5 MB fixture is generated
+**The `Go` workflow does not run the oracle.** The 10.9 MB fixture is generated
 rather than committed, so the twelve fixture-backed tests skip on a fresh clone
 and a green `Go` badge means the identities, round-trips, invariants and NaN
 sweeps pass.

@@ -47,6 +47,8 @@ func countCrownCases(t *testing.T, f cffdrsFixture) int {
 //
 // C6 is included here. Its ROS and CFB are a different quantity (see
 // crownChangesROS), but CSI and RSO are the same equations for every fuel.
+//
+// ledger: CFBcalc.r
 func TestCFFDRSCrownThreshold(t *testing.T) {
 	f := loadCFFDRS(t)
 	countCrownCases(t, f)
@@ -121,6 +123,8 @@ func TestCFFDRSCrownThreshold(t *testing.T) {
 //
 // C6 is excluded from both. cffdrs computes its CFB from a crown rate of spread
 // this package does not implement, so its cfb column is not this quantity.
+//
+// ledger: CFBcalc.r
 func TestCFFDRSCrownFractionBurned(t *testing.T) {
 	f := loadCFFDRS(t)
 	countCrownCases(t, f)
@@ -197,6 +201,8 @@ func TestCFFDRSCrownFractionBurned(t *testing.T) {
 // disagreement about the equations that is really a disagreement about rounding.
 // The exact-boundary behaviour is pinned by TestDescribeFireBoundaries instead,
 // where it can be asserted without a float in the way.
+//
+// ledger: CFBcalc.r
 func TestCFFDRSFireDescription(t *testing.T) {
 	f := loadCFFDRS(t)
 	countCrownCases(t, f)
