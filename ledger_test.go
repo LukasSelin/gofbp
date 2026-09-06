@@ -360,7 +360,6 @@ func TestLedgerLogIsContiguous(t *testing.T) {
 
 	const iso = "2006-01-02"
 	var newest time.Time
-	seen := map[string]bool{}
 	prev := time.Time{}
 	for _, e := range l.Log {
 		d, err := time.Parse(iso, e.Date)
@@ -368,12 +367,14 @@ func TestLedgerLogIsContiguous(t *testing.T) {
 			t.Errorf("%s:%d: %q is not a YYYY-MM-DD date", ledgerPath, e.Line, e.Date)
 			continue
 		}
-		if seen[e.Date] {
-			t.Errorf("%s:%d: %s appears twice; one line per audit", ledgerPath, e.Line, e.Date)
-		}
-		seen[e.Date] = true
-		if !prev.IsZero() && !d.Before(prev) {
-			t.Errorf("%s:%d: %s is not older than the line above it — the log is newest first",
+		// Repeated dates are allowed. This first required them to be unique — "one
+		// line per audit" — which was an inference from DAILY-CHECK.md rather than
+		// something it says, and 2026-09-06 disproved it by carrying three separate
+		// audits. What the log actually promises is that a GAP in the dates means
+		// the check was skipped, and that survives two entries in a day; a rule that
+		// forbids the second one just pushes a real audit out of the record.
+		if !prev.IsZero() && d.After(prev) {
+			t.Errorf("%s:%d: %s is newer than the line above it — the log is newest first",
 				ledgerPath, e.Line, e.Date)
 		}
 		prev = d

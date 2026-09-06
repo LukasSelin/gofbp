@@ -43,7 +43,7 @@ failing obscurely. Newest first:
 
 | sha256 | cases | recorded before |
 |---|---|---|
-| `12b9a009…89a7f` | 20716 | the M3/M4 mixedwoods (`8b0cf01`), which took `PDF_VALUES` from three values to five, split the M1/M2 and M3/M4 sweeps because they take different blend inputs, and added M3/M4 to the slope block |
+| `12b9a009…89a7f` | 20716 | the M3/M4 mixedwoods (`8b0cf01`), which took `PDF_VALUES` from three values to five, split the M1/M2 and M3/M4 sweeps because they take different blend inputs, and added M3/M4 to the slope block. It has no `M3` or `M4` rows at all, so `TestCFFDRSSlopeBackSolve` logs loudly rather than asserting the eq. 42b/42c readings |
 | `612ef152…21058` | ~11500 | the crown-fire sweep, so it carries no `cbh`, `cfl`, `fmc`, `sfc`, `csi` or `rso` columns |
 
 **The move from `12b9a009` to `148a5a9e` moved no reference number.** That was
