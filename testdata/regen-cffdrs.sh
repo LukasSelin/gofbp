@@ -100,15 +100,21 @@ docker)
 	# silently lands somewhere useless. Turn the rewriting off for the run, and
 	# hand Docker the host path in the form Docker Desktop wants.
 	MOUNT_SRC="$REPO_ROOT"
+	BUILD_CTX="$SCRIPT_DIR"
 	case "$(uname -s)" in
 	MINGW* | MSYS* | CYGWIN*)
 		MOUNT_SRC="$(cd "$REPO_ROOT" && pwd -W)"
+		# The build context is an argument too, and turning the rewriting off
+		# below stops Git Bash fixing it up for us: hand docker build the same
+		# host-path form as the mount, or it is told to read "/c/..." and
+		# reports the context as not found.
+		BUILD_CTX="$(cd "$SCRIPT_DIR" && pwd -W)"
 		export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL="*"
 		;;
 	esac
 
 	if [ "$DRY_RUN" = 1 ]; then
-		echo "would build: $IMAGE (R $R_VERSION, cffdrs $CFFDRS_VERSION)"
+		echo "would build: $IMAGE (R $R_VERSION, cffdrs $CFFDRS_VERSION) from $BUILD_CTX"
 		echo "would run:   docker run --rm -v $MOUNT_SRC:/repo $IMAGE"
 		exit 0
 	fi
@@ -117,7 +123,7 @@ docker)
 		docker build \
 			--build-arg "R_VERSION=$R_VERSION" \
 			--build-arg "CFFDRS_VERSION=$CFFDRS_VERSION" \
-			-t "$IMAGE" "$SCRIPT_DIR"
+			-t "$IMAGE" "$BUILD_CTX"
 	fi
 	echo "Running the sweep in $IMAGE..."
 	# The container writes the fixture as root; on Linux that would leave a

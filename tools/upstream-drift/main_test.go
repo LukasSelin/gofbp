@@ -41,14 +41,16 @@ func TestChangedFileJoinsToItsLedgerRow(t *testing.T) {
 		changedFile{"R/rate_of_spread.r", "modified"},          // ✅
 		changedFile{"R/rate_of_spread_at_time.r", "modified"},  // 🔴
 		changedFile{"R/fwi.r", "modified"},                     // ⚪
-		changedFile{"R/rate_of_spread_at_theta.r", "modified"}, // 🟢
+		changedFile{"R/direction.r", "modified"},               // 🟢
+		changedFile{"R/rate_of_spread_at_theta.r", "modified"}, // 🟡
 	)
 
 	for _, tc := range []struct{ file, want string }{
 		{"rate_of_spread.r", ledger.Ported},
 		{"rate_of_spread_at_time.r", ledger.Missing},
 		{"fwi.r", ledger.OutOfScope},
-		{"rate_of_spread_at_theta.r", ledger.Invariant},
+		{"direction.r", ledger.Invariant},
+		{"rate_of_spread_at_theta.r", ledger.Partial},
 	} {
 		c, ok := in(rep, tc.file)
 		if !ok {
