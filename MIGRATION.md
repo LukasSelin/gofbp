@@ -4,7 +4,8 @@ What has been read, what has been ported, what has deliberately been left out,
 and what is still owed. The upstream is
 [cffdrs/cffdrs_r](https://github.com/cffdrs/cffdrs_r); the daily procedure that
 keeps this file honest is [DAILY-CHECK.md](DAILY-CHECK.md). `/migration-check`
-audits this file; `/migration-port` moves one row of it.
+audits this file daily; `/migration-sweep` is the same audit's judgement half fanned
+out, for when ten minutes is not enough; `/migration-port` moves one row of it.
 
 A row here is a claim about this repository, so it has to be checkable. "Ported"
 means the Go function exists **and** a test asserts it; "Ported ✅" additionally
