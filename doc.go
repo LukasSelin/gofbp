@@ -117,9 +117,12 @@
 // fire that rate describes — surface, intermittent crown, or continuous crown.
 // That statement was the actual gap, not an arithmetic one.
 //
-// Not implemented, and all of it caller-supplied instead: foliar moisture content
-// FMC (from latitude, longitude, elevation and date), surface fuel consumption
-// SFC (from FFMC and BUI per fuel), and the published per-fuel CBH and CFL
+// Surface fuel consumption SFC is implemented — see SurfaceFuelConsumption and
+// consumption.go — but Crown does NOT call it. Crown.SFC stays a field the caller
+// fills, because computing it needs a grass fuel load that only the caller has.
+//
+// Not implemented, and caller-supplied instead: foliar moisture content FMC (from
+// latitude, longitude, elevation and date), and the published per-fuel CBH and CFL
 // default tables. The last is the one with teeth — without those tables a caller
 // has no source for crown base height or crown fuel load inside this package and
 // must bring its own, and CFL in particular is what keeps the fuels with no crown

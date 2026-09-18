@@ -83,7 +83,9 @@ and 4:
 
 **`audit`** — stop before DAILY-CHECK.md step 5. Port nothing. Instead name the
 top unblocked 🔴 row from the dependency order and say what its first concrete
-step is. Porting a coefficient is not an unattended-agent task.
+step is. Porting unattended is not forbidden — `/migration-port` does it, under a
+cap that ends the run at an unmerged PR — but this command does not borrow that
+cap, so it does not borrow the work either.
 
 **`port`** — re-run the gate as `go run ./tools/precheck -mode port` and **stop
 unless it exits 0.** If it passes, do exactly one row: the top unblocked one, not

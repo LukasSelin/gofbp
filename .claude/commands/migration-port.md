@@ -1,7 +1,7 @@
 ---
 description: Port one row from the migration ledger — oracle column first, then the Go, then the tests and the ledger
 argument-hint: "[ledger row, e.g. SFC | FMC | CBH/CFL | C6 | TFC] (default: top unblocked)"
-allowed-tools: Bash(go run ./tools/...:*), Bash(git:*), Bash(go test:*), Bash(go build:*), Bash(go vet:*), Bash(./testdata/regen-cffdrs.sh:*), Bash(sha256sum:*), Bash(cp:*), Read, Edit, Write, Glob, Grep, WebFetch
+allowed-tools: Bash(go run ./tools/...:*), Bash(git:*), Bash(go test:*), Bash(go build:*), Bash(go vet:*), Bash(./testdata/regen-cffdrs.sh:*), Bash(sha256sum:*), Bash(cp:*), Bash(gh pr create:*), Bash(gh pr view:*), Read, Edit, Write, Glob, Grep, WebFetch
 ---
 
 Port exactly one row of [MIGRATION.md](../../MIGRATION.md) from 🔴 to ✅.
@@ -15,8 +15,21 @@ prevent.
 **One row per run.** If the row turns out to be two things wearing one name,
 port the first and say so.
 
-This command is for a human-reviewed session. Do not schedule it. `/migration-check`
-is the scheduled one, and it stops before this work on purpose.
+**A run of this ends at a pull request, never at a merge.** That is the review
+this command depends on, and it holds the same whether a person typed it or a
+schedule fired it — the `fbp-port` scheduled task runs exactly this command
+unattended, and stays honest by capping itself there: branch off `main`, never
+commit to `main`, open the PR, do not merge it, do not bump `CFFDRS_VERSION`. If
+Go got written but could not be asserted against the fixture, the PR opens as a
+draft saying so.
+
+An unattended run carries one extra rule: it may not **decide** anything on
+"Escalate rather than decide" at the bottom of this file. It reports the decision
+that is needed and stops — and it does not drop to an easier row to get past one,
+for the same reason §0 exists.
+
+`/migration-check` is the daily scheduled audit, and it still stops before this
+work on purpose.
 
 ---
 
@@ -46,12 +59,15 @@ message.
 
 - [ ] Read `testdata/gen_cffdrs_reference.R`'s emit block and `cffdrsCase` in `cffdrs_test.go`.
 
-**(a) The column already exists.** `fmc` and `sfc` are already emitted and
-already on `cffdrsCase` — carried as *inputs*, because the Go side deliberately
-does not compute them. Porting either needs **no generator change**: the column
-stops being an input and becomes the assertion. This is the cheapest case and it
-covers the top two rows of the dependency order. It also does not move the
-fixture digest, which makes it the cheapest to review.
+**(a) The column already exists.** Porting the row needs **no generator change**:
+the column stops being an input the tests read and becomes the assertion. It does
+not move the fixture digest either, which makes it the cheapest case to review.
+
+`sfc` was the worked example and is now spent — it went ✅ on 2026-09-18, and
+`consumption_cffdrs_test.go` is what that looked like, including how it handled
+the one driver the fixture has no column for. `fmc` is the remaining one: emitted,
+on `cffdrsCase`, still carried as an input because the Go side does not yet
+compute it.
 
 **(b) The column can be added.** Add the name to `needed`, add the line to
 `case_json`, add the field to `cffdrsCase`, regenerate, record the new digest.

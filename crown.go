@@ -30,9 +30,15 @@ import "math"
 // (see the package doc), so C6's ROS remains surface-only.
 //
 // It also does not produce its own inputs. FMC (from latitude, longitude,
-// elevation and date) and SFC (from FFMC and BUI per fuel) are the caller's, as
-// are CBH and CFL. The published system has per-fuel default tables for the
-// latter two; they are deliberately absent here — see the package doc.
+// elevation and date) is the caller's, as are CBH and CFL. The published system
+// has per-fuel default tables for the latter two; they are deliberately absent
+// here — see the package doc.
+//
+// SFC is the one that changed: SurfaceFuelConsumption in consumption.go computes
+// it, and a caller should feed the result into Crown.SFC. Crown does not do that
+// itself, and the reason is the eq. 18 grass branch — SFC for O1A/O1B IS the
+// grass fuel load, so a Crown that computed its own SFC would have to invent one,
+// which is the local judgement this package exists to refuse.
 
 // FireDescription is the FBP System's FD: which of the three fire types the
 // crown fraction burned puts this fire in. The single-letter values are the
