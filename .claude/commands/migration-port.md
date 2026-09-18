@@ -74,10 +74,23 @@ compute it.
 This *does* move the digest — see §4, where proving it moved nothing else is the
 work.
 
-**(c) No column can exist.** Then say precisely why, in the row's note, the way
-`ROSAtAngle`'s row does — `fbp()` returns the ellipse's parameters, not a rate at
-a bearing. The result is 🟢, never ✅, and it needs identity/invariant tests
-carrying the whole weight instead.
+**(c) No column can exist.** Then say precisely why, in the row's note. The
+result is 🟢, never ✅, and it needs identity/invariant tests carrying the whole
+weight instead.
+
+`ROSAtAngle`'s row was this file's worked example of (c), on the claim that
+`fbp()` "returns the ellipse's parameters, not a rate at a bearing". **That claim
+was false, and the example is kept here as the warning it turned into.** `fbp()`
+returns `TROS`, and eq. 94 exists too — so the row spent months at 🟢 for a
+reason that was never checked. When it finally was (2026-09-18), the honest
+answer turned out to be (c) anyway, but on completely different grounds: *both*
+upstream quantities are numerically defective, so neither can be a reference. See
+the row in `MIGRATION.md` for the measurements.
+
+The lesson for a new row is the one that cost this one two audits: **"no column
+exists" is a claim about upstream, so check upstream for it.** Grep the output
+contract; call the function. A (c) that rests on an unverified assertion about
+what `fbp()` returns is a 🟢 you will have to take back.
 
 Case (c) has a trap worth naming: **CBH and CFL are recorded as sent**, `-1` on
 the surface sweeps, and `fbp()` returns neither. So the per-fuel default tables
