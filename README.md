@@ -289,9 +289,16 @@ It has earned that twice:
   250·59.5/101 — a systematic ~1e-3 relative bias in ISI that every back-solved
   equivalent wind would have inherited in the same direction.
 
-`ROSAtAngle`'s ellipse geometry has no cffdrs column to check against — `fbp()`
-returns the ellipse's parameters, not a rate at an arbitrary bearing — so it is
-pinned by exact identities at 0° and 180° plus a shape assertion instead.
+`ROSAtAngle`'s ellipse geometry is pinned by exact identities at 0° and 180° plus
+a shape assertion rather than by the oracle. Not for want of a column: cffdrs
+offers two rates at a bearing and **both are defective**. `fbp()`'s `TROS`
+subtracts a value in degrees (`RAZ`) from one in radians (`THETA`) inside a
+single `cos()`, so it does not return `ROS` even at the head; and eq. 94's
+`rate_of_spread_at_theta` — unexported, never called by `fbp()` — has a pole at
+90° behind a guard that never fires, returns negative rates between 30° and 90°,
+and yields `ROS` at both 0° and 180° so `BROS` never comes back. Measured against
+the pinned oracle on 2026-09-18; see `ROSAtAngle`'s doc comment and
+[MIGRATION.md](MIGRATION.md).
 
 **The `Go` workflow does not run the oracle.** The 10.9 MB fixture is generated
 rather than committed, so the seventeen fixture-backed tests skip on a fresh clone

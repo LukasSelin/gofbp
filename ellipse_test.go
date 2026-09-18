@@ -88,9 +88,10 @@ func TestCFFDRSFlankROS(t *testing.T) {
 	t.Logf("%d cases, %d mismatched", len(f.Cases), bad)
 }
 
-// The two exact identities that pin the ellipse geometry. cffdrs' fbp() returns
-// the ellipse's parameters but no rate at an arbitrary bearing, so these — not
-// the oracle — are what says ROSAtAngle is the right curve through them.
+// The two exact identities that pin the ellipse geometry. cffdrs does return a
+// rate at a bearing — two of them — but both are defective and neither can serve
+// as a reference; ROSAtAngle's doc has the measurements. So these — not the
+// oracle — are what says ROSAtAngle is the right curve through them.
 func TestROSAtAngleReproducesHeadAndBackExactly(t *testing.T) {
 	f := loadCFFDRS(t)
 	const tol = 1e-9

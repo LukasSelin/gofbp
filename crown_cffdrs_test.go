@@ -121,8 +121,24 @@ func TestCFFDRSCrownThreshold(t *testing.T) {
 // apart because pass two failing while pass one passes localises the fault to the
 // spread rate rather than the threshold.
 //
-// C6 is excluded from both. cffdrs computes its CFB from a crown rate of spread
-// this package does not implement, so its cfb column is not this quantity.
+// C6 is excluded from both, and the reason this comment used to give was wrong.
+// It said cffdrs computes C6's CFB from a crown rate of spread this package does
+// not implement. It does not: crown_fraction_burned_c6(RSC, RSS, RSO) returns
+// crown_fraction_burned(RSS, RSO) — eq. 58 on the SURFACE rate, the same equation
+// every other fuel uses. RSC enters only as a gate (RSC > RSS), and the crown rate
+// enters ROS, not CFB. Checked against the pinned oracle on 2026-09-18.
+//
+// The real mechanism is narrower and applies to PASS ONE only: the fixture's ros
+// column for C6 is the blended RSS + CFB·(RSC-RSS), so feeding it as the surface
+// rate feeds the wrong quantity.
+//
+// Pass two has no such excuse — it feeds this package's own surface rate, which
+// IS RSS — and excluding C6 there removes 768 rows that match exactly. That is an
+// exclusion hiding agreement rather than disagreement. It is left in place because
+// narrowing an exclusion changes what this test asserts, which is a decision
+// rather than a cleanup; MIGRATION.md carries it as an open question.
+//
+// Do not widen this back to cover the C6 rows pass two would assert.
 //
 // ledger: CFBcalc.r
 func TestCFFDRSCrownFractionBurned(t *testing.T) {

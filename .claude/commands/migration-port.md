@@ -65,19 +65,36 @@ not move the fixture digest either, which makes it the cheapest case to review.
 
 `sfc` was the worked example and is now spent — it went ✅ on 2026-09-18, and
 `consumption_cffdrs_test.go` is what that looked like, including how it handled
-the one driver the fixture has no column for. `fmc` is the remaining one: emitted,
-on `cffdrsCase`, still carried as an input because the Go side does not yet
-compute it.
+the one driver the fixture has no column for. **There is no case (a) row left**:
+`fmc` was the other one, and it turned out not to be case (a) at all. The column
+was there, but three of its five drivers were constants in the generator, so
+asserting against it would have checked one branch of three. Read that as the
+warning it is — **"the column exists" is not the same claim as "the column
+exercises the function"**, and the second is the one that matters. Check what the
+sweep actually varies before deciding a row is cheap.
 
 **(b) The column can be added.** Add the name to `needed`, add the line to
 `case_json`, add the field to `cffdrsCase`, regenerate, record the new digest.
 This *does* move the digest — see §4, where proving it moved nothing else is the
 work.
 
-**(c) No column can exist.** Then say precisely why, in the row's note, the way
-`ROSAtAngle`'s row does — `fbp()` returns the ellipse's parameters, not a rate at
-a bearing. The result is 🟢, never ✅, and it needs identity/invariant tests
-carrying the whole weight instead.
+**(c) No column can exist.** Then say precisely why, in the row's note. The
+result is 🟢, never ✅, and it needs identity/invariant tests carrying the whole
+weight instead.
+
+`ROSAtAngle`'s row was this file's worked example of (c), on the claim that
+`fbp()` "returns the ellipse's parameters, not a rate at a bearing". **That claim
+was false, and the example is kept here as the warning it turned into.** `fbp()`
+returns `TROS`, and eq. 94 exists too — so the row spent months at 🟢 for a
+reason that was never checked. When it finally was (2026-09-18), the honest
+answer turned out to be (c) anyway, but on completely different grounds: *both*
+upstream quantities are numerically defective, so neither can be a reference. See
+the row in `MIGRATION.md` for the measurements.
+
+The lesson for a new row is the one that cost this one two audits: **"no column
+exists" is a claim about upstream, so check upstream for it.** Grep the output
+contract; call the function. A (c) that rests on an unverified assertion about
+what `fbp()` returns is a 🟢 you will have to take back.
 
 Case (c) has a trap worth naming: **CBH and CFL are recorded as sent**, `-1` on
 the surface sweeps, and `fbp()` returns neither. So the per-fuel default tables
@@ -115,7 +132,7 @@ say so in the test's comment rather than letting it read as a direct assertion.
   0. **Anything else is the finding — stop and report it.** The tool keys cases
   by their inputs, so added rows and a reordered sweep are not a diff; only a
   changed number is. This is the check the whole repository is organised around,
-  and it is not something eyes do over 23,532 cases.
+  and it is not something eyes do over 23,748 cases.
 - [ ] `go test . -run TestCFFDRS`, and report the per-fuel counts the test logs. A test asserting three hundred rows when you expected three thousand is passing for the wrong reason.
 - [ ] Write the `TestCFFDRS*` — and give it a **`ledger:` line in its doc comment** naming the upstream R file it asserts:
 
@@ -135,7 +152,7 @@ exclusion needs a reason with a mechanism in it, not a symptom.
 
 ## 5. Close it out
 
-- [ ] **If the fixture changed:** record the new sha256 in `testdata/README.md`, keeping the previous digest and saying what it predates, and update the **Fixture sha256** row of `MIGRATION.md`'s Pins. `TestLedgerFixtureDigestMatchesTheRecordedOne` checks the two agree. If the sweep grew, the case count is written down in four places — `testdata/README.md`, `MIGRATION.md`, `DAILY-CHECK.md` and `testdata/regen-cffdrs.sh` — so grep the old number rather than fixing one. Two checks cover this between them: `TestDocsAgreeOnTheSweepSize` fails if you update some and not others, and `precheck` notes it when all four agree but disagree with the fixture in hand. That second case is the one that actually happened — all four said "~18400" for two commits while the generator produced 20716 and then 23532.
+- [ ] **If the fixture changed:** record the new sha256 in `testdata/README.md`, keeping the previous digest and saying what it predates, and update the **Fixture sha256** row of `MIGRATION.md`'s Pins. `TestLedgerFixtureDigestMatchesTheRecordedOne` checks the two agree. If the sweep grew, the case count is written down in five places — `testdata/README.md`, `MIGRATION.md`, `DAILY-CHECK.md`, `testdata/regen-cffdrs.sh` and step 4 of this command — so grep the old number rather than fixing one. Two checks cover this between them: `TestDocsAgreeOnTheSweepSize` fails if you update some and not others, and `precheck` notes it when all five agree but disagree with the fixture in hand. That second case is the one that actually happened — all four said "~18400" for two commits while the generator produced 20716 and then 23532.
 - [ ] `MIGRATION.md`: the row's status, a **Log** line dated today, and the Pins checked-dates set to that same date. **Take the row off "Concepts still missing, in dependency order"** — `TestLedgerDependencyOrderIsComplete` fails if a done row is still listed.
 - [ ] `README.md`: move the item between "What is implemented" and "What is not implemented", and check the surrounding prose is still true — several paragraphs there describe the gap you just closed.
 - [ ] `go test ./...`, `go vet ./...`. The ledger tests are part of that run; a failure there is telling you the ledger and the code have come apart, not that the test is fussy.

@@ -469,12 +469,12 @@ func plural(n int) string {
 	return "s"
 }
 
-// documentedCases reads the case count testdata/README.md states. Four files
+// documentedCases reads the case count testdata/README.md states. Five files
 // carry that number and none of them is generated, so it is exactly the kind of
-// prose that goes stale quietly: all four said "~18400" across two commits while
-// the generator produced 20716 and then 23532.
+// prose that goes stale quietly: four of them said "~18400" across two commits
+// while the generator produced 20716 and then 23532.
 //
-// ledger_test.go checks the four agree with EACH OTHER, which needs no fixture
+// ledger_test.go checks that they agree with EACH OTHER, which needs no fixture
 // and so runs in CI. What it cannot check is whether they are all wrong
 // together. That needs a real fixture, which is here.
 func documentedCases() int {

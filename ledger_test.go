@@ -466,7 +466,8 @@ func TestFixtureIsNotCommitted(t *testing.T) {
 
 // TestDocsAgreeOnTheNumberOfOracleTests catches the cheapest kind of documentation
 // drift: prose that counts something the code can count for itself. Four files
-// tell a reader how many fixture-backed tests they are missing without one.
+// tell a reader how many fixture-backed tests they are missing without one, and
+// the commands a session follows may come to say it too.
 func TestDocsAgreeOnTheNumberOfOracleTests(t *testing.T) {
 	fset := token.NewFileSet()
 	matches, err := filepath.Glob("*_test.go")
@@ -505,7 +506,18 @@ func TestDocsAgreeOnTheNumberOfOracleTests(t *testing.T) {
 	// all ("the TestCFFDRS* tests") is prose, not a count.
 	counted := regexp.MustCompile(`(\w+) (fixture-backed tests|TestCFFDRS\* tests)`)
 
-	for _, path := range []string{"README.md", "testdata/README.md", ".claude/setup-session.sh", "DAILY-CHECK.md"} {
+	// The four fixed files are required. The commands are globbed rather than
+	// listed so a new one is covered the day it lands, and because a stale count
+	// in a command is worse than one in a README: the command is what an
+	// unattended session follows. None of them states a count today.
+	paths := []string{"README.md", "testdata/README.md", ".claude/setup-session.sh", "DAILY-CHECK.md"}
+	commands, err := filepath.Glob(".claude/commands/*.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths = append(paths, commands...)
+
+	for _, path := range paths {
 		raw, err := os.ReadFile(path)
 		if err != nil {
 			t.Errorf("read %s: %v", path, err)
@@ -526,25 +538,43 @@ func TestDocsAgreeOnTheNumberOfOracleTests(t *testing.T) {
 // TestDocsAgreeOnTheSweepSize is the sibling of the test above, for the other
 // number this repository writes down in prose and generates in code.
 //
-// Four files state the fixture's case count and nothing generates any of them.
-// They went stale together once already: all four said "~18400" across two
-// commits while the generator produced 20716 and then 23532, because 8b0cf01
-// widened the sweep and updated none of them.
+// Five files state the fixture's case count and nothing generates any of them.
+// Four of them went stale together once already: all four said "~18400" across
+// two commits while the generator produced 20716 and then 23532, because 8b0cf01
+// widened the sweep and updated none of them. The fifth is a command, where a
+// stale count is worse still — it is what an unattended session follows.
 //
-// This can only check the four against EACH OTHER — the count itself needs a
+// This can only check them against EACH OTHER — the count itself needs a
 // real fixture, and these tests run on a fresh clone that has none. `precheck`
 // closes that half, comparing the documented number to the fixture in hand.
-// Together they catch both "one file was updated" and "all four are wrong".
+// Together they catch both "one file was updated" and "all of them are wrong".
 //
 // The patterns are deliberately specific. A loose one matches the 18804 in
 // testdata/README.md's account of the re-baseline, which is a different number
 // about a different thing.
 func TestDocsAgreeOnTheSweepSize(t *testing.T) {
-	sources := []struct{ path, pattern string }{
-		{"testdata/README.md", `sweep of ([\d,]+) FBP cases`},
-		{"MIGRATION.md", `generated ([\d,]+)-case sweep`},
-		{"DAILY-CHECK.md", `— ([\d,]+) cases is not something eyes check`},
-		{"testdata/regen-cffdrs.sh", `(?m)^# ([\d,]+) cases through cffdrs::fbp`},
+	type source struct {
+		path, pattern string
+		optional      bool // a command that never states the size is not a failure
+	}
+	sources := []source{
+		{path: "testdata/README.md", pattern: `sweep of ([\d,]+) FBP cases`},
+		{path: "MIGRATION.md", pattern: `generated ([\d,]+)-case sweep`},
+		{path: "DAILY-CHECK.md", pattern: `— ([\d,]+) cases is not something eyes check`},
+		{path: "testdata/regen-cffdrs.sh", pattern: `(?m)^# ([\d,]+) cases through cffdrs::fbp`},
+	}
+
+	// The commands are globbed, not listed, so a new one is covered the day it
+	// lands, and optional because most of them will never state the size. The
+	// pattern stays as specific as the four above: `over N cases` is how this
+	// repository phrases the whole-sweep count, and it reaches neither the 18804
+	// nor the "~18400" this comment warns about. migration-port.md states it today.
+	commands, err := filepath.Glob(".claude/commands/*.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range commands {
+		sources = append(sources, source{path: path, pattern: `over ([\d,]+) cases`, optional: true})
 	}
 
 	counts := map[string]int{}
@@ -556,6 +586,9 @@ func TestDocsAgreeOnTheSweepSize(t *testing.T) {
 		}
 		m := regexp.MustCompile(s.pattern).FindSubmatch(raw)
 		if m == nil {
+			if s.optional {
+				continue
+			}
 			t.Errorf("%s no longer states the sweep size where this test looks (%s). "+
 				"Restore the sentence or update the pattern — do not delete the check, "+
 				"this number has gone stale before.", s.path, s.pattern)

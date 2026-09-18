@@ -18,8 +18,10 @@ import "math"
 //
 // Same rule as the rest of this package: the published system and nothing else.
 // LB, BROS and FROS are asserted against cffdrs in cffdrs_test.go. The ellipse
-// geometry in ROSAtAngle is NOT oracled against cffdrs — see its doc for why,
-// and for the identities that pin it instead.
+// geometry in ROSAtAngle is NOT oracled against cffdrs — not because cffdrs
+// computes no such rate, but because both quantities it offers are defective.
+// See ROSAtAngle's doc for the measurements, and for the identities that pin it
+// instead.
 
 // BackISIRatio is BISI/ISI at the same FFMC and net effective wind: the factor
 // that converts a forward Initial Spread Index into the backing one.
@@ -113,12 +115,33 @@ func FlankROS(rosHead, rosBack, lb float64) float64 {
 // behind the centre. Reading that gap as a bug and "fixing" it is the mistake
 // this paragraph exists to prevent.
 //
-// Unlike LB, BROS and FROS, this geometry has no cffdrs column to assert
-// against — fbp() returns the ellipse's parameters, not a rate at an arbitrary
-// bearing. It is pinned instead by the two exact identities above plus monotone
-// decrease from head to back (TestROSAtAngle*), which together determine the
-// curve at its endpoints and forbid every plausible transcription error in
-// between.
+// Unlike LB, BROS and FROS, this geometry is not asserted against a cffdrs
+// column. That is NOT because cffdrs computes no rate at a bearing — it offers
+// two, and both were measured against the pinned oracle (cffdrs 1.9.2, R 4.6.1)
+// on 2026-09-18 and found unusable as a reference:
+//
+//   - fbp(output = "ALL") returns TROS = ROS·(1-E)/(1-E·cos(THETA-RAZ)) with
+//     E = sqrt(1-1/LB²). THETA is converted to RADIANS earlier in the function
+//     and RAZ to DEGREES, and the two are then subtracted inside one cos(). So
+//     TROS does not even return ROS at the head: for RAZ = 180° it gives 2.835
+//     where ROS is 16.149. The mismatch is present at the pinned upstream commit
+//     4d20a30 as well, and it propagates to TCFB, TFI, TTI and TROSt.
+//
+//   - rate_of_spread_at_theta(ROS, FROS, BROS, THETA), eq. 94 of Wotton et al.
+//     (2009), is unexported and never called by fbp(). Its two leading terms,
+//     (ROS-BROS)/(2·cosθ) and (ROS+BROS)/(2·cosθ), share a denominator and
+//     collapse to ROS/cosθ, which puts a pole at θ = 90°; the ifelse(c1 == 0, …)
+//     guard never fires there because cos(π/2) is 6.12e-17, not 0. It returns
+//     -2.34e17 at 90°, negative rates from 30° to 89.9°, and ROS at BOTH 0° and
+//     180°, so BROS is never recovered. Whether the published equation reads the
+//     same way was NOT checked — that needs the paper, and it is the difference
+//     between a cffdrs transcription error and one in ST-X-3's successor.
+//
+// So this function is pinned by the two exact identities above plus the shape
+// assertions (TestROSAtAngle*), which together determine the curve at its
+// endpoints and forbid every plausible transcription error in between. On the
+// case measured above it returns ROS at 0° and 0.9674577 at 180°, which is BROS
+// to seven figures — neither upstream quantity does that.
 func ROSAtAngle(rosHead, rosFlank, rosBack, thetaDeg float64) float64 {
 	if rosHead <= 0 {
 		return 0
