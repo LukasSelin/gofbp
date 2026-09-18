@@ -92,9 +92,10 @@ GRASS <- c("O1a", "O1b")
 # fbp() honours verbatim: CBH in (0, 50] and CFL in (0, 2]. Send a value outside
 # those and it is silently replaced by the table, which is the same trap again.
 base_row <- function(fuel, ffmc, bui, ws, gs, pc = 50, pdf = 35, cc = 80,
-                     cbh = -1, cfl = -1, lat = 60, dj = 200) {
+                     cbh = -1, cfl = -1, lat = 60, dj = 200,
+                     long = 15, elv = 0, d0 = 0) {
   data.frame(
-    FuelType = fuel, LAT = lat, LONG = 15, ELV = 0, Dj = dj, D0 = 0,
+    FuelType = fuel, LAT = lat, LONG = long, ELV = elv, Dj = dj, D0 = d0,
     FFMC = ffmc, BUI = bui, WS = ws, WD = 0, GS = gs, Aspect = 0,
     PC = pc, PDF = pdf, cc = cc, GFL = 0.35, CBH = cbh, CFL = cfl,
     hr = 1, theta = 0, Accel = 0, montane = 0,
@@ -229,6 +230,89 @@ for (fuel in c("C1", "C2", "C3", "C4", "C5", "C6", "C7", "D1",
   }
 }
 
+# Foliar moisture content. A block of its own, for the same reason the crown one
+# is: FMC depends on NONE of the inputs the sweeps above vary. It is a function of
+# LAT, LONG, ELV, Dj and D0 alone, so crossing its drivers into any existing block
+# would multiply thousands of rows to say the same thing the ~200 below say.
+#
+# Why it had to exist at all. Every one of the rows above sends LONG = 15, ELV = 0
+# and D0 = 0, which means they exercise exactly one of the model's three paths:
+#
+#   eqs. 1, 2   the ELV <= 0 branch, at a SINGLE longitude. LATN is an
+#               exponential in (150 - LONG), and one longitude pins a point on it,
+#               not its shape -- 46, 23.4 and 0.0360 could each be wrong and the
+#               fixture would not notice.
+#   eqs. 3, 4   the ELV > 0 branch. UNREACHED. 43, 33.7, 0.0351, 142.1 and 0.0172
+#               had no oracle coverage whatsoever.
+#   D0 given    the caller-supplied minimum date, which bypasses eqs. 1-4
+#               entirely. UNREACHED.
+#
+# Each site gets its OWN LATITUDE, and that is load-bearing rather than tidy.
+# tools/fixture-diff keys a case by its input columns to compare two fixtures, and
+# LONG/ELV/D0 do not exist in any fixture generated before this block did. Two
+# sites differing only in those three would therefore be indistinguishable to a
+# diff against an older fixture, and it would report ambiguous keys and stop being
+# believable. Distinct latitudes keep every row identifiable under the old key as
+# well as the new one. BUI is 60 for the same reason: it is in none of the sweeps
+# above, so no row here can collide with one of theirs either.
+#
+# The fuel is C2 throughout. FMC does not vary by fuel -- but fbp() ZEROES it for
+# D1/S1/S2/S3/O1A/O1B, the fuels with no crown, so the block has to use one that
+# keeps it. That zeroing is already oracled thousands of times over by the blocks
+# above; see the Go side, which excludes those fuels by name.
+FMC_SITES <- list(
+  # Eqs. 1, 2 -- ELV <= 0, swept across the longitudes eqs. 1/3 are written for
+  # (52 to 140 degrees WEST, positive). Six points on the LATN exponential.
+  list(lat = 35, long = 60, elv = 0, d0 = 0),
+  list(lat = 40, long = 80, elv = 0, d0 = 0),
+  list(lat = 50, long = 100, elv = 0, d0 = 0),
+  list(lat = 55, long = 120, elv = 0, d0 = 0),
+  list(lat = 65, long = 140, elv = 0, d0 = 0),
+  list(lat = 70, long = 52, elv = 0, d0 = 0),
+  # fbp() folds the sign of LONG (LONG <- ifelse(LONG < 0, -LONG, LONG)) before
+  # calling foliar_moisture_content, so a caller may hand it the conventional
+  # signed longitude. This row is the one that says so: -60 must give what +60
+  # gives. Without it the Go test's math.Abs would be an assumption. If the fold
+  # were absent, (150 - (-60)) is 210 and D0 lands on 118 rather than 116.
+  list(lat = 36, long = -60, elv = 0, d0 = 0),
+  # Eqs. 3, 4 -- ELV > 0. Elevation and longitude both vary, and 0.0172 per metre
+  # needs the spread: 200 m contributes 3.4 days, 3000 m contributes 51.6.
+  list(lat = 37, long = 60, elv = 200, d0 = 0),
+  list(lat = 42, long = 80, elv = 800, d0 = 0),
+  list(lat = 48, long = 100, elv = 1500, d0 = 0),
+  list(lat = 52, long = 120, elv = 2500, d0 = 0),
+  list(lat = 58, long = 140, elv = 400, d0 = 0),
+  list(lat = 68, long = 52, elv = 3000, d0 = 0),
+  # D0 supplied -- eqs. 1-4 are bypassed, so LAT/LONG/ELV do nothing here except
+  # keep the rows distinct (see above). The first two are ordinary integer dates.
+  list(lat = 33, long = 90, elv = 0, d0 = 120),
+  list(lat = 63, long = 90, elv = 900, d0 = 200),
+  # The last three pin the ROUNDING, which is not in the paper at all: cffdrs
+  # 1.9.2 rounds D0 -- including a supplied one -- with R's round(), which goes to
+  # the EVEN digit on an exact half. 150.5 is the case that separates the two
+  # rules: half-to-even gives 150, half-away-from-zero (Go's math.Round) gives
+  # 151, and the two differ in FMC wherever ND is inside eq. 6's window. 151.5 is
+  # the control the two rules agree on, and 150.7 is ordinary rounding.
+  list(lat = 34, long = 90, elv = 0, d0 = 150.5),
+  list(lat = 39, long = 90, elv = 0, d0 = 151.5),
+  list(lat = 44, long = 90, elv = 0, d0 = 150.7)
+)
+# Spread across the year rather than around any one site's minimum: D0 runs from
+# 113 to 271 across the sites above, and these twelve dates put every one of them
+# on all three of eqs. 6 (ND < 30), 7 (30 <= ND < 50) and 8 (ND >= 50). The Go
+# side counts the three and fails if any is empty, so narrowing this list is
+# caught rather than quietly halving what the block asserts. 90/150/170 also land
+# ND on exactly 30 and exactly 50 for the D0 = 120 site, which is where a
+# mistranscribed < for <= would show.
+FMC_DJ_VALUES <- c(1, 60, 90, 110, 130, 150, 170, 190, 210, 240, 280, 330)
+
+for (s in FMC_SITES) {
+  for (dj in FMC_DJ_VALUES) {
+    add(base_row("C2", 90, 60, 10, 0, lat = s$lat, dj = dj,
+                 long = s$long, elv = s$elv, d0 = s$d0))
+  }
+}
+
 inp <- do.call(rbind, rows)
 # Carry an explicit ID. Without one, fbp() auto-assigns 1..n and returns its rows
 # sorted by ID as a STRING -- for n > 9 that is 1, 10, 100, 1000, 2, ... and reading
@@ -252,11 +336,15 @@ if (!identical(as.integer(as.character(out$ID)), inp$ID)) {
 # alone cannot answer "how fast towards MY location" -- see ellipse.go.
 #
 # FMC, SFC, CSI and RSO are the crown-fire threshold's chain. They are carried
-# rather than recomputed on the Go side because FMC and SFC are deliberately NOT
-# implemented there -- the Go package takes them as caller-supplied inputs, so the
-# fixture is where they have to come from. CSI and RSO are the intermediate steps
-# the Go side does implement, and having them separately is what lets a failure
-# localise to eq. 56 or eq. 57 rather than to "CFB is wrong".
+# separately rather than folded into CFB because that is what lets a failure
+# localise to eq. 56 or eq. 57 rather than to "CFB is wrong". FMC and SFC were
+# also, for a time, inputs the Go side read rather than quantities it computed;
+# both are now ported (foliar.go, consumption.go) and both columns are assertions.
+#
+# Note what fbp() does to FMC before returning it: it forces 0 for D1, S1, S2, S3,
+# O1A and O1B, the fuels with no crown. That is the DRIVER's decision, not
+# foliar_moisture_content()'s, so those rows say nothing about eqs. 1-8 and the Go
+# side skips them by name.
 needed <- c("ISI", "BE", "SF", "WSV", "CFB", "FD", "ROS", "LB", "BROS", "FROS",
             "FMC", "SFC", "CSI", "RSO")
 missing <- setdiff(needed, names(out))
@@ -303,6 +391,13 @@ case_json <- function(i) {
     ', "cfl": ', num(inp$CFL[i]),
     ', "lat": ', num(inp$LAT[i]),
     ', "dj": ', num(inp$Dj[i]),
+    # LONG/ELV/D0 are inputs, carried for the same reason LAT and Dj are: they
+    # are the rest of what FMC is a function of. They were constants in this
+    # script until the FMC block above gave them something to say, which is why
+    # a fixture older than that block has no such column.
+    ', "long": ', num(inp$LONG[i]),
+    ', "elv": ', num(inp$ELV[i]),
+    ', "d0": ', num(inp$D0[i]),
     ', "isi": ', num(out$ISI[i]),
     ', "be": ', num(out$BE[i]),
     ', "sf": ', num(out$SF[i]),

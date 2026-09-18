@@ -125,6 +125,8 @@ rate alone is the wrong number for "how fast is this coming at *me*". See
   `CriticalSurfaceROS` (RSO), `CrownFractionBurned` (CFB), `DescribeFire` (FD)
 - `SurfaceFuelConsumption` (SFC) — all eleven per-fuel equations, including
   GLC-X-10's revised C1
+- `FoliarMoistureContent` (FMC) and `DateOfMinimumFoliarMoisture` (D0) — foliar
+  moisture from latitude, longitude, elevation and the day of the year
 
 ## Fuel codes
 
@@ -186,16 +188,18 @@ rate was already right; what was missing was the statement of what kind of fire
 it describes.
 
 You supply the inputs. `Crown` takes foliar moisture content (FMC), surface fuel
-consumption (SFC), crown base height (CBH) and crown fuel load (CFL). FMC, CBH
-and CFL have no source in this package at all. SFC does — `SurfaceFuelConsumption`
-computes it — but `Crown` still will not call it for you, because to do so it would
-have to invent a grass fuel load:
+consumption (SFC), crown base height (CBH) and crown fuel load (CFL). CBH and CFL
+have no source in this package at all. FMC and SFC do — `FoliarMoistureContent`
+and `SurfaceFuelConsumption` compute them — but `Crown` still will not call either
+for you: one would have to invent a grass fuel load, the other a location and a
+date.
 
 ```go
+fmc := fbp.FoliarMoistureContent(55, 120 /* °W */, 0 /* elev */, 200 /* day */, 0)
 sfc := fbp.SurfaceFuelConsumption("C2", ffmc, bui, 0 /* pc */, 0 /* gfl */)
 
 cfb := fbp.CrownFractionBurned(fbp.Crown{
-    FMC: 97, SFC: sfc, CBH: 3, CFL: 0.8,
+    FMC: fmc, SFC: sfc, CBH: 3, CFL: 0.8,
     SurfaceROS: surfaceROS, // RSI·BE on the net effective wind — NOT RSI·BE·SF
 })
 fd := fbp.DescribeFire(cfb) // "S", "I" or "C"
@@ -212,11 +216,10 @@ factor — up to tenfold, straight into an exponential.
 unimplemented fuel comes back as a spread rate of zero, so screen codes with
 `CanonicalFuelCode` rather than reading the number.
 
-**Crown-fire inputs and the per-fuel crown tables.** FMC (from latitude,
-longitude, elevation and date) and the published per-fuel CBH and CFL defaults
-are absent. SFC is no longer on this list — `SurfaceFuelConsumption` is ported and
-oracle-asserted — but it is a function you call, not a default `Crown` applies.
-The CBH/CFL gap has teeth:
+**The per-fuel crown tables.** The published per-fuel CBH and CFL defaults are
+absent. FMC and SFC are no longer on this list — `FoliarMoistureContent` and
+`SurfaceFuelConsumption` are both ported and oracle-asserted — but they are
+functions you call, not defaults `Crown` applies. The CBH/CFL gap has teeth:
 there is no crown base height or crown fuel load source inside this package, so a
 caller must bring its own — and CFL is what keeps the fuels with no crown (D1,
 S1–S3, O1A, O1B) reporting zero.
@@ -291,7 +294,7 @@ returns the ellipse's parameters, not a rate at an arbitrary bearing — so it i
 pinned by exact identities at 0° and 180° plus a shape assertion instead.
 
 **The `Go` workflow does not run the oracle.** The 10.9 MB fixture is generated
-rather than committed, so the fourteen fixture-backed tests skip on a fresh clone
+rather than committed, so the seventeen fixture-backed tests skip on a fresh clone
 and a green `Go` badge means the identities, round-trips, invariants and NaN
 sweeps pass.
 

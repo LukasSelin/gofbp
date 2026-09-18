@@ -30,15 +30,25 @@ func TestLoadTheRealLedger(t *testing.T) {
 	}
 
 	byFile := l.ByFile()
-	// A row that owns several upstream files must be reachable by each of them —
-	// the FMC row is the one that does, and it is also the next row to be ported.
-	for _, f := range []string{"foliar_moisture_content.r", "foliar_moisture_content_minimum.r"} {
-		r, ok := byFile[f]
-		if !ok {
-			t.Fatalf("%s is not indexed", f)
-		}
-		if r.Status != Missing {
-			t.Errorf("%s: status %q, want %q", f, r.Status, Missing)
+	// A row that owns several upstream files must be reachable by each of them,
+	// and the index must carry the row's real status rather than the first one it
+	// saw. Two rows exercise that: FMC, which owns two files and is ported, and
+	// the acceleration model, which owns three and is still owed.
+	for _, tc := range []struct {
+		files  []string
+		status string
+	}{
+		{[]string{"foliar_moisture_content.r", "foliar_moisture_content_minimum.r"}, Ported},
+		{[]string{"rate_of_spread_at_time.r", "distance_at_time.r", "length_to_breadth_at_time.r"}, Missing},
+	} {
+		for _, f := range tc.files {
+			r, ok := byFile[f]
+			if !ok {
+				t.Fatalf("%s is not indexed", f)
+			}
+			if r.Status != tc.status {
+				t.Errorf("%s: status %q, want %q", f, r.Status, tc.status)
+			}
 		}
 	}
 
@@ -59,10 +69,12 @@ func TestDependencyOrderKeepsItsOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	// This tracks the ledger's current top row, so it moves with every port —
-	// SFC held it until 2026-09-18. Updating it IS the check: a parser that
-	// deduplicated or reordered the list would land on something else.
-	if got := l.DependencyOrder[0]; got != "foliar_moisture_content.r" {
-		t.Errorf("first item = %q, want foliar_moisture_content.r — FMC is the top unblocked row", got)
+	// SFC held it until 2026-09-18, then FMC for the rest of that day. Updating
+	// it IS the check: a parser that deduplicated or reordered the list would
+	// land on something else.
+	if got := l.DependencyOrder[0]; got != "crown_base_height.r" {
+		t.Errorf("first item = %q, want crown_base_height.r — the CBH/CFL tables are the "+
+			"top unblocked row", got)
 	}
 	seen := map[string]bool{}
 	for _, f := range l.DependencyOrder {

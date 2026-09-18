@@ -40,10 +40,17 @@ type cffdrsCase struct {
 	// and since fbp() returns neither, those rows cannot say what values the
 	// oracle actually used. Only rows with CBH > 0 and CFL > 0 are usable for the
 	// crown assertions; see usableForCrown.
-	CBH  float64 `json:"cbh"`
-	CFL  float64 `json:"cfl"`
+	CBH float64 `json:"cbh"`
+	CFL float64 `json:"cfl"`
+	// LAT, LONG, ELV, DJ and D0 are the whole of what FMC is a function of.
+	// LONG is SIGNED as the generator sent it — fbp() folds the sign itself, so
+	// FoliarMoistureContent has to be handed math.Abs(LONG) to match. See
+	// TestCFFDRSFoliarMoistureContent.
 	LAT  float64 `json:"lat"`
+	LONG float64 `json:"long"`
+	ELV  float64 `json:"elv"`
 	DJ   float64 `json:"dj"`
+	D0   float64 `json:"d0"`
 	ISI  float64 `json:"isi"`
 	BE   float64 `json:"be"`
 	SF   float64 `json:"sf"`
