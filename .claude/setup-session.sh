@@ -2,7 +2,7 @@
 # Session setup for gofbp. Runs before Claude Code launches, on a fresh
 # environment, and its one real job is to make the oracle available.
 #
-# Without testdata/cffdrs.json the fourteen TestCFFDRS* tests skip, and a session
+# Without testdata/cffdrs.json the seventeen TestCFFDRS* tests skip, and a session
 # that cannot run them cannot say whether a coefficient is right -- only whether
 # it is self-consistent. Both /migration-check and /migration-port treat that as
 # a precondition and refuse to port through it, so an environment without the

@@ -44,8 +44,16 @@ import (
 // deliberate: a new output column shows up as "new", which is the expected result
 // of a port, while a new INPUT column would silently make keys ambiguous — so
 // duplicate keys are detected and reported rather than papered over.
+//
+// long, elv and d0 joined this list when the FMC block was added to the sweep.
+// They were constants in the generator before that, so a fixture older than that
+// block carries no such column and they cannot participate in the key for a diff
+// against one — which is exactly the case the "present in BOTH fixtures" rule
+// below handles, and why that block gives every one of its sites a distinct
+// latitude.
 var inputCols = []string{
-	"fuel", "ffmc", "bui", "ws", "wd", "gs", "pc", "pdf", "cc", "cbh", "cfl", "lat", "dj",
+	"fuel", "ffmc", "bui", "ws", "wd", "gs", "pc", "pdf", "cc", "cbh", "cfl",
+	"lat", "long", "elv", "dj", "d0",
 }
 
 type fixture struct {

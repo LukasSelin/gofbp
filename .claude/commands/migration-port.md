@@ -65,9 +65,13 @@ not move the fixture digest either, which makes it the cheapest case to review.
 
 `sfc` was the worked example and is now spent — it went ✅ on 2026-09-18, and
 `consumption_cffdrs_test.go` is what that looked like, including how it handled
-the one driver the fixture has no column for. `fmc` is the remaining one: emitted,
-on `cffdrsCase`, still carried as an input because the Go side does not yet
-compute it.
+the one driver the fixture has no column for. **There is no case (a) row left**:
+`fmc` was the other one, and it turned out not to be case (a) at all. The column
+was there, but three of its five drivers were constants in the generator, so
+asserting against it would have checked one branch of three. Read that as the
+warning it is — **"the column exists" is not the same claim as "the column
+exercises the function"**, and the second is the one that matters. Check what the
+sweep actually varies before deciding a row is cheap.
 
 **(b) The column can be added.** Add the name to `needed`, add the line to
 `case_json`, add the field to `cffdrsCase`, regenerate, record the new digest.
@@ -128,7 +132,7 @@ say so in the test's comment rather than letting it read as a direct assertion.
   0. **Anything else is the finding — stop and report it.** The tool keys cases
   by their inputs, so added rows and a reordered sweep are not a diff; only a
   changed number is. This is the check the whole repository is organised around,
-  and it is not something eyes do over 23,532 cases.
+  and it is not something eyes do over 23,748 cases.
 - [ ] `go test . -run TestCFFDRS`, and report the per-fuel counts the test logs. A test asserting three hundred rows when you expected three thousand is passing for the wrong reason.
 - [ ] Write the `TestCFFDRS*` — and give it a **`ledger:` line in its doc comment** naming the upstream R file it asserts:
 
