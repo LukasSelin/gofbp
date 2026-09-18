@@ -58,8 +58,11 @@ func TestDependencyOrderKeepsItsOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := l.DependencyOrder[0]; got != "surface_fuel_consumption.r" {
-		t.Errorf("first item = %q, want surface_fuel_consumption.r — SFC is what unblocks TFC and HFI", got)
+	// This tracks the ledger's current top row, so it moves with every port —
+	// SFC held it until 2026-09-18. Updating it IS the check: a parser that
+	// deduplicated or reordered the list would land on something else.
+	if got := l.DependencyOrder[0]; got != "foliar_moisture_content.r" {
+		t.Errorf("first item = %q, want foliar_moisture_content.r — FMC is the top unblocked row", got)
 	}
 	seen := map[string]bool{}
 	for _, f := range l.DependencyOrder {

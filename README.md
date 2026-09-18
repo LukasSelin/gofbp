@@ -123,6 +123,8 @@ rate alone is the wrong number for "how fast is this coming at *me*". See
   `AngleBetweenDeg`
 - The crown-fire threshold: `CriticalSurfaceIntensity` (CSI),
   `CriticalSurfaceROS` (RSO), `CrownFractionBurned` (CFB), `DescribeFire` (FD)
+- `SurfaceFuelConsumption` (SFC) — all eleven per-fuel equations, including
+  GLC-X-10's revised C1
 
 ## Fuel codes
 
@@ -184,12 +186,16 @@ rate was already right; what was missing was the statement of what kind of fire
 it describes.
 
 You supply the inputs. `Crown` takes foliar moisture content (FMC), surface fuel
-consumption (SFC), crown base height (CBH) and crown fuel load (CFL), and none of
-those four is derived here:
+consumption (SFC), crown base height (CBH) and crown fuel load (CFL). FMC, CBH
+and CFL have no source in this package at all. SFC does — `SurfaceFuelConsumption`
+computes it — but `Crown` still will not call it for you, because to do so it would
+have to invent a grass fuel load:
 
 ```go
+sfc := fbp.SurfaceFuelConsumption("C2", ffmc, bui, 0 /* pc */, 0 /* gfl */)
+
 cfb := fbp.CrownFractionBurned(fbp.Crown{
-    FMC: 97, SFC: 2.5, CBH: 3, CFL: 0.8,
+    FMC: 97, SFC: sfc, CBH: 3, CFL: 0.8,
     SurfaceROS: surfaceROS, // RSI·BE on the net effective wind — NOT RSI·BE·SF
 })
 fd := fbp.DescribeFire(cfb) // "S", "I" or "C"
@@ -207,8 +213,10 @@ unimplemented fuel comes back as a spread rate of zero, so screen codes with
 `CanonicalFuelCode` rather than reading the number.
 
 **Crown-fire inputs and the per-fuel crown tables.** FMC (from latitude,
-longitude, elevation and date), SFC (from FFMC and BUI per fuel), and the
-published per-fuel CBH and CFL defaults are all absent. The last one has teeth:
+longitude, elevation and date) and the published per-fuel CBH and CFL defaults
+are absent. SFC is no longer on this list — `SurfaceFuelConsumption` is ported and
+oracle-asserted — but it is a function you call, not a default `Crown` applies.
+The CBH/CFL gap has teeth:
 there is no crown base height or crown fuel load source inside this package, so a
 caller must bring its own — and CFL is what keeps the fuels with no crown (D1,
 S1–S3, O1A, O1B) reporting zero.
@@ -218,7 +226,8 @@ its crown path (RSC) is not implemented, so C6's spread rate here is
 surface-only. Every oracle test excludes C6 by name.
 
 Also absent: CFC, TFC and HFI, the acceleration model, and everything else
-`cffdrs::fbp()` returns that is not spread geometry.
+`cffdrs::fbp()` returns that is not spread geometry. TFC's surface half is
+unblocked now that SFC exists; its crown half still needs CFL.
 
 The three paragraphs above are a summary. [MIGRATION.md](MIGRATION.md) is the
 full account: every file in `cffdrs`'s `R/` with a status, what is deliberately
@@ -282,7 +291,7 @@ returns the ellipse's parameters, not a rate at an arbitrary bearing — so it i
 pinned by exact identities at 0° and 180° plus a shape assertion instead.
 
 **The `Go` workflow does not run the oracle.** The 10.9 MB fixture is generated
-rather than committed, so the twelve fixture-backed tests skip on a fresh clone
+rather than committed, so the fourteen fixture-backed tests skip on a fresh clone
 and a green `Go` badge means the identities, round-trips, invariants and NaN
 sweeps pass.
 

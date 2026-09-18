@@ -38,15 +38,15 @@ func in(rep *report, file string) (change, bool) {
 // the real ledger, so a row moving between statuses changes what this reports.
 func TestChangedFileJoinsToItsLedgerRow(t *testing.T) {
 	rep := classified(t,
-		changedFile{"R/rate_of_spread.r", "modified"},           // ✅
-		changedFile{"R/surface_fuel_consumption.r", "modified"}, // 🔴
-		changedFile{"R/fwi.r", "modified"},                      // ⚪
-		changedFile{"R/rate_of_spread_at_theta.r", "modified"},  // 🟢
+		changedFile{"R/rate_of_spread.r", "modified"},          // ✅
+		changedFile{"R/rate_of_spread_at_time.r", "modified"},  // 🔴
+		changedFile{"R/fwi.r", "modified"},                     // ⚪
+		changedFile{"R/rate_of_spread_at_theta.r", "modified"}, // 🟢
 	)
 
 	for _, tc := range []struct{ file, want string }{
 		{"rate_of_spread.r", ledger.Ported},
-		{"surface_fuel_consumption.r", ledger.Missing},
+		{"rate_of_spread_at_time.r", ledger.Missing},
 		{"fwi.r", ledger.OutOfScope},
 		{"rate_of_spread_at_theta.r", ledger.Invariant},
 	} {
@@ -66,7 +66,7 @@ func TestChangedFileJoinsToItsLedgerRow(t *testing.T) {
 func TestVerdictRanksAnAssertedRowAboveEverythingElse(t *testing.T) {
 	asserted := classified(t,
 		changedFile{"R/fwi.r", "modified"},
-		changedFile{"R/surface_fuel_consumption.r", "modified"},
+		changedFile{"R/rate_of_spread_at_time.r", "modified"},
 		changedFile{"R/buildup_effect.r", "modified"}, // ✅
 	)
 	if asserted.Exit != exitAsserted {
@@ -78,7 +78,7 @@ func TestVerdictRanksAnAssertedRowAboveEverythingElse(t *testing.T) {
 
 	owed := classified(t,
 		changedFile{"R/fwi.r", "modified"},
-		changedFile{"R/surface_fuel_consumption.r", "modified"},
+		changedFile{"R/rate_of_spread_at_time.r", "modified"},
 	)
 	if owed.Exit != exitInScope {
 		t.Errorf("exit = %d, want %d (only a 🔴 row changed)", owed.Exit, exitInScope)
@@ -102,7 +102,7 @@ func TestVerdictRanksAnAssertedRowAboveEverythingElse(t *testing.T) {
 // decided whether it is in scope.
 func TestAnUnknownRFileOutranksARowStillOwed(t *testing.T) {
 	rep := classified(t,
-		changedFile{"R/surface_fuel_consumption.r", "modified"},
+		changedFile{"R/rate_of_spread_at_time.r", "modified"},
 		changedFile{"R/fire_growth.r", "added"},
 	)
 	c, ok := in(rep, "fire_growth.r")
