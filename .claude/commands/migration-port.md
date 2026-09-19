@@ -1,6 +1,6 @@
 ---
 description: Port one row from the migration ledger — oracle column first, then the Go, then the tests and the ledger
-argument-hint: "[ledger row, e.g. SFC | FMC | CBH/CFL | C6 | TFC] (default: top unblocked)"
+argument-hint: "[ledger row, e.g. CBH/CFL | TFC | HFI | acceleration] (default: top unblocked)"
 allowed-tools: Bash(go run ./tools/...:*), Bash(git:*), Bash(go test:*), Bash(go build:*), Bash(go vet:*), Bash(./testdata/regen-cffdrs.sh:*), Bash(sha256sum:*), Bash(cp:*), Bash(gh pr create:*), Bash(gh pr view:*), Read, Edit, Write, Glob, Grep, WebFetch
 ---
 
@@ -63,15 +63,26 @@ message.
 the column stops being an input the tests read and becomes the assertion. It does
 not move the fixture digest either, which makes it the cheapest case to review.
 
-`sfc` was the worked example and is now spent — it went ✅ on 2026-09-18, and
+`sfc` was the first worked example — it went ✅ on 2026-09-18, and
 `consumption_cffdrs_test.go` is what that looked like, including how it handled
-the one driver the fixture has no column for. **There is no case (a) row left**:
-`fmc` was the other one, and it turned out not to be case (a) at all. The column
-was there, but three of its five drivers were constants in the generator, so
-asserting against it would have checked one branch of three. Read that as the
-warning it is — **"the column exists" is not the same claim as "the column
-exercises the function"**, and the second is the one that matters. Check what the
-sweep actually varies before deciding a row is cheap.
+the one driver the fixture has no column for. **`C6calc.r` was the second, on
+2026-09-19, and it is the better template**: `c6_cffdrs_test.go` shows what to do
+when the existing column is a *different quantity* from the one the tests
+already read, which is the shape most remaining case (a) rows will have.
+
+**"There is no case (a) row left" stood here until 2026-09-19 and was wrong.**
+C6 was one, exactly as the sweep that wrote this sentence had predicted two rows
+below it. Do not read the sentence's successors as a count either — check the
+rows.
+
+What `fmc` is still the warning for: it *looked* like case (a) and was not.
+The column was there, but three of its five drivers were constants in the
+generator, so asserting against it would have checked one branch of three. Read
+that as the warning it is — **"the column exists" is not the same claim as "the
+column exercises the function"**, and the second is the one that matters. Check
+what the sweep actually varies before deciding a row is cheap. C6 passes that
+check where `fmc` did not: its crown block varies FMC through LAT × Dj and ISI
+through FFMC × WS × GS, so every coefficient in eqs. 61 and 64 is reached.
 
 **(b) The column can be added.** Add the name to `needed`, add the line to
 `case_json`, add the field to `cffdrsCase`, regenerate, record the new digest.
