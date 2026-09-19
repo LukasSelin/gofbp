@@ -122,6 +122,15 @@ func loadCFFDRS(t *testing.T) cffdrsFixture {
 //
 // If that reading is ever wrong, the tests using this fail loudly with a ratio
 // attached. Do not widen it back to CFB != 0 to make a failure go away.
+//
+// C6's crown rate of spread landing (c6.go, 2026-09-19) does NOT make this
+// removable, and the reason is not the crown path. ROS takes a fuel code, ISI,
+// BUI and the three blend inputs, with nowhere to put the FMC, SFC, CBH and CFL
+// C6's blend needs, so it is still the surface rate for C6 and the fixture's ros
+// column still is not. TestCFFDRSC6RateOfSpread is where C6's coverage lives
+// instead, and its header records a second reason for the sloped rows: cffdrs'
+// own slope back-solve for C6 inverts a blended rate, which NetEffectiveWind
+// does not reproduce for any fuel.
 func crownChangesROS(c cffdrsCase) bool { return ourFuel(c.Fuel) == "C6" }
 
 func closeEnough(got, want, tol float64) bool {

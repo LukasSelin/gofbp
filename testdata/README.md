@@ -70,7 +70,7 @@ inputs and outputs, so they cost a little time and nothing else.
 
 ## What happens without it
 
-`go test ./...` passes. Seventeen fixture-backed tests skip with a message pointing
+`go test ./...` passes. Eighteen fixture-backed tests skip with a message pointing
 here; everything else — the identities, round-trips, rotational invariance and
 NaN sweeps — runs unconditionally, and is what CI checks on every push.
 

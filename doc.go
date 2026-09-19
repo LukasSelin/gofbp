@@ -109,13 +109,20 @@
 // description FD. See crown.go.
 //
 // What that does and does not change is worth being exact about, because the
-// natural assumption is wrong in both directions. It does not raise any spread
+// natural assumption is wrong in both directions. CFB does not raise any spread
 // rate: in the published system the final rate of spread IS the surface rate for
 // every fuel type except C6, which alone has a separate crown rate of spread
 // folded in through CFB. So for sixteen of the seventeen fuels here, a crowning
 // stand's ROS was already right, and CFB is the missing statement of what kind of
 // fire that rate describes — surface, intermittent crown, or continuous crown.
 // That statement was the actual gap, not an arithmetic one.
+//
+// C6 is the seventeenth, and its crown rate of spread RSC is implemented — see
+// c6.go, where C6CrownFire returns the CFB-weighted blend of the surface and
+// crown rates that the published system reports for that fuel. It is a separate
+// call rather than part of ROS because ROS's signature has nowhere to put the
+// FMC, SFC, CBH and CFL the blend needs, so ROS remains the surface rate for all
+// seventeen fuels.
 //
 // Surface fuel consumption SFC and foliar moisture content FMC are both
 // implemented — see SurfaceFuelConsumption in consumption.go and
@@ -129,10 +136,16 @@
 // must bring its own, and CFL in particular is what keeps the fuels with no crown
 // (D1, S1-S3, O1A, O1B) reporting zero.
 //
-// Also not implemented: C6's crown rate of spread RSC, so C6's ROS here remains
-// surface-only and every oracle test excludes it by name; and the consumption and
-// intensity outputs CFC, TFC and HFI, which depend on CFB but are a separate
-// quantity from spread.
+// Also not implemented: the consumption and intensity outputs CFC, TFC and HFI,
+// which depend on CFB but are a separate quantity from spread; and C6's SLOPED
+// path. The second is narrower than it sounds and is worth stating, because C6's
+// crown rate of spread landing does not close it. cffdrs back-solves the
+// slope-equivalent wind from rate_of_spread(), which for C6 returns the BLENDED
+// rate — so its equivalent wind for a sloped C6 stand depends on FMC and CBH,
+// which no surface-only inversion reproduces. NetEffectiveWind here is
+// surface-only for every fuel, so on sloped ground C6CrownFire should be fed an
+// ISI the caller trusts rather than one back-solved from this package. On flat
+// ground the two agree exactly; see TestCFFDRSC6RateOfSpread.
 //
 // Coefficients are the published FBP tables (Forestry Canada Fire Danger Group
 // 1992, ST-X-3, Tables 6–7), with the grass curing revision from Wotton,
