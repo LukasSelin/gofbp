@@ -26,8 +26,14 @@ import "math"
 // rate_of_spread() returns RSS unchanged wherever the fuel is not C6, and folds
 // CFB in only through C6's separate crown path. So for sixteen of the seventeen
 // fuels here, CFB is a classification of a spread rate this package already
-// computes correctly, not a correction to it. C6's crown path is not implemented
-// (see the package doc), so C6's ROS remains surface-only.
+// computes correctly, not a correction to it.
+//
+// C6's crown path lives in c6.go, and it is a separate call for the same reason:
+// C6CrownFire takes the surface rate and returns the blended one, rather than ROS
+// quietly returning a different quantity for one fuel code. Note that C6's CFB
+// is this file's eq. 58 on the surface rate, exactly as for every other fuel —
+// C6CrownFractionBurned only adds the gate. The crown rate of spread enters the
+// RATE, not the fraction.
 //
 // It also does not produce its own inputs. FMC (from latitude, longitude,
 // elevation and date) is the caller's, as are CBH and CFL. The published system

@@ -123,6 +123,10 @@ rate alone is the wrong number for "how fast is this coming at *me*". See
   `AngleBetweenDeg`
 - The crown-fire threshold: `CriticalSurfaceIntensity` (CSI),
   `CriticalSurfaceROS` (RSO), `CrownFractionBurned` (CFB), `DescribeFire` (FD)
+- C6's crown path: `FoliarMoistureEffect` (FME), `C6CrownROS` (RSC),
+  `C6CrownFractionBurned`, `C6ROS` and `C6CrownFire` — the CFB-weighted blend of
+  surface and crown rates that FBP reports for the one fuel whose ROS is not the
+  surface rate
 - `SurfaceFuelConsumption` (SFC) — all eleven per-fuel equations, including
   GLC-X-10's revised C1
 - `FoliarMoistureContent` (FMC) and `DateOfMinimumFoliarMoisture` (D0) — foliar
@@ -187,6 +191,11 @@ spread blended in through CFB. So for sixteen of the seventeen fuels the spread
 rate was already right; what was missing was the statement of what kind of fire
 it describes.
 
+C6 is the seventeenth, and it has its own call — see
+[C6: the one fuel whose rate of spread is not the surface rate](#c6-the-one-fuel-whose-rate-of-spread-is-not-the-surface-rate).
+`ROS` still returns the surface rate for every fuel including C6, because its
+signature has nowhere to put the FMC, SFC, CBH and CFL the blend needs.
+
 You supply the inputs. `Crown` takes foliar moisture content (FMC), surface fuel
 consumption (SFC), crown base height (CBH) and crown fuel load (CFL). CBH and CFL
 have no source in this package at all. FMC and SFC do — `FoliarMoistureContent`
@@ -210,6 +219,42 @@ fd := fbp.DescribeFire(cfb) // "S", "I" or "C"
 feeding the simplified product here over-predicts crowning by the whole slope
 factor — up to tenfold, straight into an exponential.
 
+## C6: the one fuel whose rate of spread is not the surface rate
+
+C6 (conifer plantation) has a crown rate of spread RSC of its own, and once the
+fire is in the crowns the published answer is a CFB-weighted blend of the surface
+and crown rates. That blend is what `cffdrs` reports in its ROS column for C6,
+and `C6CrownFire` is how you get it here.
+
+```go
+// RSS, the surface rate, assembled the ordinary way. Eqs. 62 and 63 are just the
+// generic curve at C6's table row, so RSI and BuildupEffect already cover them.
+isi := fbp.ISI(ffmc, windKmh)
+rss := fbp.RSI("C6", isi, 0, 0, 0) * fbp.BuildupEffect("C6", bui)
+
+ros, cfb := fbp.C6CrownFire(fbp.Crown{
+    FMC: fmc, SFC: sfc, CBH: 7, CFL: 0.8,
+    SurfaceROS: rss,
+}, isi)
+fd := fbp.DescribeFire(cfb)
+```
+
+Three things about it are easy to get the wrong way round:
+
+- **C6's CFB is not computed from its crown rate.** It is eq. 58 on the *surface*
+  rate, the same equation every other fuel uses. RSC only gates whether that
+  value is reported at all — `C6CrownFractionBurned` adds the gate and nothing
+  else.
+- **RSC does not depend on BUI.** Eq. 64 is a function of ISI and foliar moisture
+  alone, so a drought that raises BUI moves C6's surface rate and leaves its
+  crown rate where it was.
+- **The blend saturates.** RSC approaches `60·FME/FMEAvg` as ISI grows, which at
+  FMC 100 is 56.9 m/min. No wind produces a faster C6 crown fire at that
+  moisture.
+
+`SurfaceROS` carries the same contract it does for the threshold: the surface
+rate from the full slope path, not `ROS`'s `RSI · BE · SF` product.
+
 ## What is not implemented
 
 **D2, and the non-fuel classes WA and NF.** See [Fuel codes](#fuel-codes) — an
@@ -224,9 +269,14 @@ there is no crown base height or crown fuel load source inside this package, so 
 caller must bring its own — and CFL is what keeps the fuels with no crown (D1,
 S1–S3, O1A, O1B) reporting zero.
 
-**C6's crown rate of spread.** C6 is the one fuel whose ROS depends on CFB, and
-its crown path (RSC) is not implemented, so C6's spread rate here is
-surface-only. Every oracle test excludes C6 by name.
+**C6 on sloped ground.** C6's crown rate of spread is implemented (above), but
+the slope back-solve for that fuel is not, and the two are separate gaps.
+`cffdrs` derives the slope-equivalent wind from `rate_of_spread()`, which for C6
+returns the *blended* rate — so its equivalent wind for a sloped C6 stand moves
+with FMC and CBH, and no surface-only inversion reproduces it.
+`NetEffectiveWind` is surface-only for every fuel. On flat ground the two agree
+exactly; on a slope, feed `C6CrownFire` an ISI you trust rather than one
+back-solved here.
 
 Also absent: CFC, TFC and HFI, the acceleration model, and everything else
 `cffdrs::fbp()` returns that is not spread geometry. TFC's surface half is
@@ -301,7 +351,7 @@ the pinned oracle on 2026-09-18; see `ROSAtAngle`'s doc comment and
 [MIGRATION.md](MIGRATION.md).
 
 **The `Go` workflow does not run the oracle.** The 10.9 MB fixture is generated
-rather than committed, so the seventeen fixture-backed tests skip on a fresh clone
+rather than committed, so the eighteen fixture-backed tests skip on a fresh clone
 and a green `Go` badge means the identities, round-trips, invariants and NaN
 sweeps pass.
 
