@@ -313,6 +313,69 @@ for (s in FMC_SITES) {
   }
 }
 
+# Crown and total fuel consumption. A block of its own, and for a reason the FMC
+# block above should make familiar: the column existing is not the same claim as
+# the column exercising the function.
+#
+# CFC is CFL x CFB, weighted by PC/100 for M1/M2 and by PDF/100 for M3/M4
+# (eqs. 66a/66b/66c), and TFC is SFC + CFC (eq. 67). Every crown-block row above
+# sends CFL = 1.0 -- fixed, deliberately, because CFL entered none of the columns
+# this fixture used to carry. It enters CFC directly, and multiplying by one
+# asserts nothing about the multiplication: eq. 66a would agree with the oracle
+# across all 10752 crown-block rows if CFL were ignored entirely. So the factor
+# needs its own sweep, and that is what this is.
+#
+# What has to vary:
+#
+#   CFL  the factor itself, four values across (0, 2]. Outside that range fbp()
+#        silently substitutes its own table (crown_fuel_load: CFL <= 0 | CFL > 2
+#        | NA), and the fixture would then record the value we SENT rather than
+#        the one it used -- the same trap the CBH/CFL note above describes. None
+#        of these is 1.0, so no row here collides with a crown-block row under
+#        tools/fixture-diff's key, which includes cfl.
+#   PC   for M1/M2 and PDF for M3/M4: the two weighting branches. Both include 0,
+#        where the branch collapses CFC to zero whatever CFL is -- which is the
+#        cheapest way to tell 66b/66c apart from 66a.
+#   CBH  and FFMC and WS together decide whether the row crowns at all. CBH 2
+#        with FFMC 95 and WS 30 crowns; CBH 20 with FFMC 85 and WS 0 does not, and
+#        a CFB of zero is what pins CFC to zero and TFC to SFC alone.
+#
+# The plain group carries C6 as well as C2/C7, because C6's CFB comes from a
+# different function (crown_fraction_burned_c6) and eq. 66a has to be indifferent
+# to that. D1 is here for a sharper reason: its PUBLISHED crown fuel load is 0, so
+# D1 never crowns through fbp()'s own table -- but CFL is a parameter of eq. 66a,
+# not a per-fuel gate inside it, and sending an explicit CFL makes fbp() honour
+# it. These rows are what says eq. 66a applies no fuel test beyond the four
+# mixedwoods. They are not a claim that D1 stands have crowns.
+#
+# BUI is 60 and GS is 0 throughout: flat, so the Go side can run the whole chain
+# from FFMC and wind, and off the BUI_VALUES grid so the block stays legible in a
+# fixture diff.
+CFC_CFL_VALUES <- c(0.3, 0.8, 1.6, 2.0)
+CFC_PC_VALUES <- c(0, 25, 75)
+CFC_PDF_VALUES <- c(0, 35, 60)
+CFC_FFMC_VALUES <- c(85, 95)
+CFC_WS_VALUES <- c(0, 30)
+CFC_CBH_VALUES <- c(2, 20)
+
+for (cfl in CFC_CFL_VALUES) {
+  for (ffmc in CFC_FFMC_VALUES) for (ws in CFC_WS_VALUES) for (cbh in CFC_CBH_VALUES) {
+    for (fuel in c("C2", "C6", "C7", "D1")) {
+      add(base_row(fuel, ffmc, 60, ws, 0, cbh = cbh, cfl = cfl))
+    }
+    for (fuel in MIXED_PC) {
+      for (pc in CFC_PC_VALUES) {
+        add(base_row(fuel, ffmc, 60, ws, 0, pc = pc, cbh = cbh, cfl = cfl))
+      }
+    }
+    for (fuel in MIXED_PDF) {
+      for (pdf in CFC_PDF_VALUES) {
+        add(base_row(fuel, ffmc, 60, ws, 0, pdf = pdf, cbh = cbh, cfl = cfl))
+      }
+    }
+  }
+}
+
 inp <- do.call(rbind, rows)
 # Carry an explicit ID. Without one, fbp() auto-assigns 1..n and returns its rows
 # sorted by ID as a STRING -- for n > 9 that is 1, 10, 100, 1000, 2, ... and reading
@@ -346,7 +409,7 @@ if (!identical(as.integer(as.character(out$ID)), inp$ID)) {
 # foliar_moisture_content()'s, so those rows say nothing about eqs. 1-8 and the Go
 # side skips them by name.
 needed <- c("ISI", "BE", "SF", "WSV", "CFB", "FD", "ROS", "LB", "BROS", "FROS",
-            "FMC", "SFC", "CSI", "RSO")
+            "FMC", "SFC", "CSI", "RSO", "CFC", "TFC")
 missing <- setdiff(needed, names(out))
 if (length(missing)) {
   stop("cffdrs ", packageVersion("cffdrs"), " did not return: ",
@@ -407,6 +470,15 @@ case_json <- function(i) {
     ', "csi": ', num(out$CSI[i]),
     ', "rso": ', num(out$RSO[i]),
     ', "cfb": ', num(out$CFB[i]),
+    # CFC and TFC are eqs. 66a/66b/66c and 67. Both are fbp() OUTPUTS, unlike sfc
+    # which spent a while here as an input the Go side read -- they were simply
+    # not emitted until consumption.go grew the two functions that compute them.
+    # Note what CFC embeds on a row that sent the CBH/CFL sentinel: fbp()
+    # substituted its own table CFL before multiplying, and this fixture records
+    # the -1 we sent, so those rows cannot say what CFL produced the number. The
+    # Go side restricts to cfl in (0, 2] for anything that reads CFL.
+    ', "cfc": ', num(out$CFC[i]),
+    ', "tfc": ', num(out$TFC[i]),
     ', "fd": ', q(as.character(out$FD[i])),
     ', "ros": ', num(out$ROS[i]),
     ', "lb": ', num(out$LB[i]),

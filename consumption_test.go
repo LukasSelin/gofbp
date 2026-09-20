@@ -313,3 +313,265 @@ func TestSurfaceFuelConsumptionFeedsTheCrownThreshold(t *testing.T) {
 			"exactly this", sfc)
 	}
 }
+
+// Total and crown fuel consumption, unconditionally.
+//
+// The oracle test above skips on a fresh clone; everything below is what CI runs
+// on every push, so the properties that matter most — the CFL factor is really
+// there, the two mixedwood weightings apply to the right families, and nothing
+// non-finite escapes — are asserted here rather than only against the fixture.
+
+// The identity eq. 67 is: with nothing in the crown, the total IS the surface.
+//
+// Worth its own test because it is the property the fixture's ~11000
+// sentinel-CFL rows carry and nothing else can: a CFB of zero has to zero CFC
+// for every fuel, including the four that carry a weighting.
+func TestTotalFuelConsumptionWithNoCrownFireIsSurfaceFuelConsumption(t *testing.T) {
+	for code := range Fuels {
+		sfc := SurfaceFuelConsumption(code, 90, 60, 50, 0.35)
+		for _, cfl := range []float64{0, 0.5, 1, 2, 1e6} {
+			if got := TotalFuelConsumption(code, cfl, 0, sfc, 50, 35); got != sfc {
+				t.Errorf("%s cfl=%v cfb=0: TFC = %v, want SFC %v", code, cfl, got, sfc)
+			}
+			if got := CrownFuelConsumption(code, cfl, 0, 50, 35); got != 0 {
+				t.Errorf("%s cfl=%v cfb=0: CFC = %v, want 0", code, cfl, got)
+			}
+		}
+	}
+}
+
+// Eq. 66a is a product, so CFC has to be linear in each factor separately. This
+// is the assertion a fixture at one CFL cannot make — see the oracle test's
+// header for why the generator grew a block to be able to make it there too.
+func TestCrownFuelConsumptionIsLinearInCrownFuelLoad(t *testing.T) {
+	const cfb = 0.4
+	for code := range Fuels {
+		base := CrownFuelConsumption(code, 1, cfb, 50, 35)
+		for _, k := range []float64{0.25, 0.5, 2, 10} {
+			got := CrownFuelConsumption(code, k, cfb, 50, 35)
+			want := k * base
+			if math.Abs(got-want) > 1e-12*math.Max(1, math.Abs(want)) {
+				t.Errorf("%s: CFC at CFL %v = %v, want %v × CFC at CFL 1 (%v)", code, k, got, k, base)
+			}
+		}
+	}
+	// And in CFB, which is the other factor of the same product.
+	for code := range Fuels {
+		base := CrownFuelConsumption(code, 1.2, 1, 50, 35)
+		for _, cfb := range []float64{0.1, 0.5, 0.9} {
+			got := CrownFuelConsumption(code, 1.2, cfb, 50, 35)
+			want := cfb * base
+			if math.Abs(got-want) > 1e-12*math.Max(1, math.Abs(want)) {
+				t.Errorf("%s: CFC at CFB %v = %v, want %v × CFC at CFB 1 (%v)", code, cfb, got, cfb, base)
+			}
+		}
+	}
+}
+
+// Which input weights which family. The names invite the wrong guess — cffdrs'
+// M2 takes PC, not PDF, despite reading like a dead-fir fuel — and getting it
+// backwards is silent: both are percentages, both are swept, and a transposed
+// pair still returns a plausible kilogram per square metre.
+func TestCrownFuelConsumptionWeightsTheRightMixedwoodInput(t *testing.T) {
+	// Deliberately float64 variables rather than untyped constants: Go folds
+	// constant arithmetic exactly, so a const product would be 0.9 where the
+	// function's own 1.5 × 0.6 is 0.8999999999999999, and the test would be
+	// checking Go's constant evaluator instead of eq. 66.
+	cfl, cfb := 1.5, 0.6
+	product := cfl * cfb
+
+	for _, code := range []string{"M1", "M2"} {
+		// Eq. 66b: PC scales it, PDF does not reach it.
+		if got := CrownFuelConsumption(code, cfl, cfb, 40, 35); math.Abs(got-0.40*product) > 1e-12 {
+			t.Errorf("%s: CFC at PC 40 = %v, want %v", code, got, 0.40*product)
+		}
+		a := CrownFuelConsumption(code, cfl, cfb, 40, 0)
+		b := CrownFuelConsumption(code, cfl, cfb, 40, 100)
+		if a != b {
+			t.Errorf("%s: PDF changed CFC (%v at PDF 0, %v at PDF 100) — eq. 66b reads PC", code, a, b)
+		}
+	}
+	for _, code := range []string{"M3", "M4"} {
+		// Eq. 66c: PDF scales it, PC does not reach it.
+		if got := CrownFuelConsumption(code, cfl, cfb, 50, 40); math.Abs(got-0.40*product) > 1e-12 {
+			t.Errorf("%s: CFC at PDF 40 = %v, want %v", code, got, 0.40*product)
+		}
+		a := CrownFuelConsumption(code, cfl, cfb, 0, 40)
+		b := CrownFuelConsumption(code, cfl, cfb, 100, 40)
+		if a != b {
+			t.Errorf("%s: PC changed CFC (%v at PC 0, %v at PC 100) — eq. 66c reads PDF", code, a, b)
+		}
+	}
+	// And every other fuel is the bare product of eq. 66a, indifferent to both.
+	for code := range Fuels {
+		switch canonical, _ := CanonicalFuelCode(code); canonical {
+		case "M1", "M2", "M3", "M4":
+			continue
+		}
+		for _, pc := range []float64{0, 50, 100} {
+			for _, pdf := range []float64{0, 50, 100} {
+				if got := CrownFuelConsumption(code, cfl, cfb, pc, pdf); got != product {
+					t.Errorf("%s at pc=%v pdf=%v: CFC = %v, want the unweighted %v",
+						code, pc, pdf, got, product)
+				}
+			}
+		}
+	}
+}
+
+// The published crown fuel load for D1, S1, S2, S3, O1A and O1B is 0, and this
+// package does not carry that table — CFL is the caller's. So the zero has to
+// arrive through the arithmetic, and it does: eq. 66a has no per-fuel gate.
+//
+// The other half of the same point is that a caller who supplies a positive CFL
+// for one of those fuels gets a positive CFC back. That is not this package
+// second-guessing the caller; it is the same behaviour fbp() has once CFL is in
+// (0, 2], and the fixture's D1 rows assert it.
+func TestCrownFuelConsumptionHasNoPerFuelGate(t *testing.T) {
+	for _, code := range []string{"D1", "S1", "S2", "S3", "O1A", "O1B"} {
+		if got := CrownFuelConsumption(code, 0, 0.5, 50, 35); got != 0 {
+			t.Errorf("%s at the published CFL of 0: CFC = %v, want 0", code, got)
+		}
+		if got := CrownFuelConsumption(code, 0.8, 0.5, 50, 35); got != 0.4 {
+			t.Errorf("%s at a caller-supplied CFL of 0.8: CFC = %v, want 0.4 — eq. 66a "+
+				"applies no fuel test of its own", code, got)
+		}
+	}
+}
+
+// An unknown fuel code returns 0 from both, which is a departure from cffdrs —
+// its ifelse chain falls through to the unweighted product for any name it does
+// not recognise. See the doc comments for why 0 is the safer answer here, and
+// note that TFC returns 0 rather than SFC: a surface-only total for a fuel that
+// could not be classified is the number that would look ordinary downstream.
+func TestTotalFuelConsumptionUnknownFuel(t *testing.T) {
+	for _, code := range []string{"", "C8", "X1", "NoSuchFuel", "M5"} {
+		if got := CrownFuelConsumption(code, 1.2, 0.5, 50, 35); got != 0 {
+			t.Errorf("CrownFuelConsumption(%q) = %v, want 0", code, got)
+		}
+		if got := TotalFuelConsumption(code, 1.2, 0.5, 3.0, 50, 35); got != 0 {
+			t.Errorf("TotalFuelConsumption(%q) = %v, want 0 (not the surface value)", code, got)
+		}
+	}
+	// The codes that ARE known keep working through the same fold, separators and
+	// case included — CanonicalFuelCode is the only spelling authority here.
+	for _, code := range []string{"c2", "C-2", "o1a", "M 3"} {
+		if got := CrownFuelConsumption(code, 1, 0.5, 50, 35); got == 0 && code != "o1a" {
+			t.Errorf("CrownFuelConsumption(%q) = 0 — the code was not recognised", code)
+		}
+	}
+}
+
+// Nothing non-finite escapes as an infinity. A NaN driver a fuel actually reads
+// propagates, which is cffdrs' behaviour; an infinite load comes back as NaN
+// rather than +Inf, for the reason SurfaceFuelConsumption gives — it would reach
+// eq. 69 as an infinite fireline intensity and read as a number.
+func TestTotalFuelConsumptionNonFiniteInput(t *testing.T) {
+	inf, ninf := math.Inf(1), math.Inf(-1)
+
+	for _, tc := range []struct {
+		name          string
+		code          string
+		cfl, cfb, sfc float64
+		pc, pdf       float64
+	}{
+		{"infinite CFL", "C2", inf, 0.5, 3, 50, 35},
+		{"negative infinite CFL", "C2", ninf, 0.5, 3, 50, 35},
+		{"infinite CFB", "C2", 1, inf, 3, 50, 35},
+		{"infinite CFL, M1", "M1", inf, 0.5, 3, 50, 35},
+		{"infinite PC on M1", "M1", 1, 0.5, 3, inf, 35},
+		{"infinite PDF on M3", "M3", 1, 0.5, 3, 50, inf},
+	} {
+		if got := CrownFuelConsumption(tc.code, tc.cfl, tc.cfb, tc.pc, tc.pdf); math.IsInf(got, 0) {
+			t.Errorf("%s: CFC = %v — an infinity escaped", tc.name, got)
+		}
+		if got := TotalFuelConsumption(tc.code, tc.cfl, tc.cfb, tc.sfc, tc.pc, tc.pdf); math.IsInf(got, 0) {
+			t.Errorf("%s: TFC = %v — an infinity escaped", tc.name, got)
+		}
+	}
+	// An infinite SFC is the caller's parameter rather than anything computed
+	// here, and it is caught in the same place for the same reason.
+	if got := TotalFuelConsumption("C2", 1, 0.5, inf, 50, 35); math.IsInf(got, 0) {
+		t.Errorf("infinite SFC: TFC = %v — an infinity escaped", got)
+	}
+
+	// NaN propagates rather than being swallowed into a plausible number.
+	nan := math.NaN()
+	for _, tc := range []struct {
+		name          string
+		code          string
+		cfl, cfb, sfc float64
+		pc, pdf       float64
+	}{
+		{"NaN CFL", "C2", nan, 0.5, 3, 50, 35},
+		{"NaN CFB", "C2", 1, nan, 3, 50, 35},
+		{"NaN PC on M1", "M1", 1, 0.5, 3, nan, 35},
+		{"NaN PDF on M4", "M4", 1, 0.5, 3, 50, nan},
+	} {
+		if got := CrownFuelConsumption(tc.code, tc.cfl, tc.cfb, tc.pc, tc.pdf); !math.IsNaN(got) {
+			t.Errorf("%s: CFC = %v, want NaN", tc.name, got)
+		}
+	}
+	if got := TotalFuelConsumption("C2", 1, 0.5, nan, 50, 35); !math.IsNaN(got) {
+		t.Errorf("NaN SFC: TFC = %v, want NaN", got)
+	}
+	// PC does not reach a conifer, so a NaN in it must NOT contaminate the
+	// answer — the same "passing a zero for a driver a fuel does not read is
+	// harmless" contract SurfaceFuelConsumption states.
+	if got := CrownFuelConsumption("C2", 1, 0.5, nan, nan); math.IsNaN(got) {
+		t.Error("C2: a NaN in PC/PDF reached eq. 66a, which reads neither")
+	}
+}
+
+// There is no floor under either quantity, unlike SFC's 1e-6. That is cffdrs'
+// behaviour — the clamp applies to SFC before this addition — and it is worth
+// pinning, because adding one here would be the kind of quiet local decision
+// this package exists not to make.
+func TestTotalFuelConsumptionHasNoFloor(t *testing.T) {
+	if got := CrownFuelConsumption("C2", 1e-12, 1e-12, 50, 35); got != 1e-24 {
+		t.Errorf("CFC of two tiny factors = %v, want 1e-24 — something clamped it", got)
+	}
+	// SFC's own floor is the only one in the chain, and it survives the addition
+	// intact when nothing crowns.
+	sfc := SurfaceFuelConsumption("C2", 90, 0, 50, 0.35)
+	if sfc != MinSurfaceFuelConsumptionKgM2 {
+		t.Fatalf("C2 at BUI 0: SFC = %v, want the floor %v", sfc, MinSurfaceFuelConsumptionKgM2)
+	}
+	if got := TotalFuelConsumption("C2", 1, 0, sfc, 50, 35); got != MinSurfaceFuelConsumptionKgM2 {
+		t.Errorf("TFC on a floored SFC with no crown fire = %v, want %v", got, MinSurfaceFuelConsumptionKgM2)
+	}
+}
+
+// TFC is monotone in both halves: more surface fuel or more crown burned can
+// only mean more total consumption. Cheap, and it is the shape of eq. 67 that a
+// transposed argument would break.
+func TestTotalFuelConsumptionIsMonotone(t *testing.T) {
+	for code := range Fuels {
+		prev := math.Inf(-1)
+		for _, cfb := range []float64{0, 0.1, 0.25, 0.5, 0.75, 0.9, 1} {
+			got := TotalFuelConsumption(code, 1.2, cfb, 2.5, 50, 35)
+			if got < prev {
+				t.Errorf("%s: TFC fell from %v to %v as CFB rose to %v", code, prev, got, cfb)
+			}
+			prev = got
+		}
+		prev = math.Inf(-1)
+		for _, sfc := range []float64{0, 0.5, 1, 3, 10} {
+			got := TotalFuelConsumption(code, 1.2, 0.5, sfc, 50, 35)
+			if got < prev {
+				t.Errorf("%s: TFC fell from %v to %v as SFC rose to %v", code, prev, got, sfc)
+			}
+			prev = got
+		}
+	}
+}
+
+// Every fuel in Fuels has to reach one of eq. 66's three branches — the guard
+// TestSurfaceFuelConsumptionCoversEveryFuel is for the switch above.
+func TestCrownFuelConsumptionCoversEveryFuel(t *testing.T) {
+	for code := range Fuels {
+		if got := CrownFuelConsumption(code, 1, 1, 100, 100); got != 1 {
+			t.Errorf("%s: CFC at CFL 1, CFB 1 and both weights at 100%% = %v, want 1", code, got)
+		}
+	}
+}
