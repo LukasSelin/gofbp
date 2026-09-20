@@ -60,6 +60,12 @@ type cffdrsCase struct {
 	CSI  float64 `json:"csi"`
 	RSO  float64 `json:"rso"`
 	CFB  float64 `json:"cfb"`
+	// CFC and TFC are eqs. 66a/66b/66c and 67. Both embed the CFL fbp() actually
+	// used, which on a row that sent the −1 sentinel is the per-fuel table value
+	// and not the −1 recorded in CFL above — so only usableForConsumption rows
+	// can say what CFL produced them. See TestCFFDRSTotalFuelConsumption.
+	CFC  float64 `json:"cfc"`
+	TFC  float64 `json:"tfc"`
 	FD   string  `json:"fd"`
 	ROS  float64 `json:"ros"`
 	LB   float64 `json:"lb"`
@@ -70,6 +76,17 @@ type cffdrsCase struct {
 // usableForCrown reports whether a case carries crown inputs this package can be
 // fed. See the CBH/CFL note above.
 func (c cffdrsCase) usableForCrown() bool { return c.CBH > 0 && c.CFL > 0 }
+
+// usableForConsumption reports whether the CFL this case SENT is the one fbp()
+// multiplied into its cfc and tfc columns.
+//
+// It is a narrower test than usableForCrown, and the extra clause is not
+// defensive. crown_fuel_load substitutes the per-fuel table whenever CFL is
+// non-positive, NA, **or greater than 2** — so a row sending CFL = 3 would be
+// recorded as 3 and computed at the table value, and reading it as an assertion
+// would blame this package for the gap. No block sends one, and this is what
+// keeps that true rather than assumed.
+func (c cffdrsCase) usableForConsumption() bool { return c.CFL > 0 && c.CFL <= 2 }
 
 type cffdrsFixture struct {
 	Oracle        string       `json:"oracle"`

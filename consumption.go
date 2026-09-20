@@ -35,8 +35,9 @@ import "math"
 // this package refuses to make. cffdrs' fbp() does substitute 0.35; that is a
 // driver's decision, and this package does not have a driver.
 //
-// It does not compute total fuel consumption or fireline intensity. Those are
-// eqs. 59-66 and are not ported yet — see MIGRATION.md.
+// It does not compute fireline intensity. HFI is eq. 69 and is not ported yet —
+// see MIGRATION.md. Total and crown fuel consumption — eqs. 66a/66b/66c and 67 —
+// are at the bottom of this file.
 
 // The SFC coefficients, by equation number.
 //
@@ -253,4 +254,105 @@ func SurfaceFuelConsumption(code string, ffmc, bui, pc, gfl float64) float64 {
 		return MinSurfaceFuelConsumptionKgM2
 	}
 	return sfc
+}
+
+// TOTAL FUEL CONSUMPTION: the surface fire's fuel plus whatever the crown fire
+// took with it.
+//
+// This is the second half of the quantity that turns a rate of spread into an
+// intensity, and it is where the crown-fire chain finally cashes out as mass.
+// CFB says what fraction of the canopy burned; CFL says how many kilograms per
+// square metre that canopy holds; their product is the fuel the crown fire
+// consumed, and adding the surface fire's own consumption gives the total that
+// eq. 69's fireline intensity is computed from.
+//
+// # Where the R disagrees with the published paper
+//
+// One place, and it is a documented revision rather than a defect. Eq. 67 is
+// FCFDG 1992's, but the CFC equations cffdrs cites are 66a, 66b and 66c from
+// Wotton, Alexander & Taylor (2009), GLC-X-10 — the same revision that replaced
+// eq. 9 with 9a/9b for C1 above. 66a is the bare product CFL·CFB. 66b and 66c
+// are the mixedwood weightings, and 66c could not have been in the 1992
+// publication at all: M3 and M4 are GLC-X-10's own fuel types.
+//
+// Note which input weights which family, because the names invite the wrong
+// guess and the same trap is already flagged on RSI: M1 and M2 are weighted by
+// PC, the conifer share, and M3 and M4 by PDF, the dead balsam fir share.
+// cffdrs' M2 takes PC despite its name.
+//
+// # What this file still does NOT do
+//
+// There is no floor under either quantity, and that is cffdrs' behaviour rather
+// than an omission — the 1e-6 clamp above applies to SFC alone, before this
+// addition, so a total consumption can legitimately be reported as exactly the
+// surface value when nothing crowned.
+
+// CrownFuelConsumption is CFC in kg/m² (eqs. 66a, 66b, 66c — GLC-X-10): the
+// crown fuel a fire consumed, given how much of the canopy burned.
+//
+// The arguments are in the reference implementation's own order — fuel, CFL,
+// CFB, PC, PDF — so the transcription can be read against it line for line. PC
+// reaches only M1 and M2, PDF only M3 and M4; every other fuel is the bare
+// product and ignores both.
+//
+// CFL is the caller's, as it is in Crown. This package has no per-fuel crown
+// fuel load table and does not substitute one — see MIGRATION.md. Passing the
+// published 0 for a fuel with no crown gives 0 here, which is the right answer
+// by the arithmetic rather than by a gate.
+//
+// The code is folded by CanonicalFuelCode. A fuel this package does not
+// implement returns 0, for the same reason SurfaceFuelConsumption does and with
+// the same departure from cffdrs, whose ifelse chain falls through to the
+// unweighted product for any name it does not recognise. Returning the product
+// for an unknown code would be the worse failure here: it is a plausible number
+// that silently skips a weighting the fuel may well need.
+//
+// A non-finite result returns NaN rather than an infinity, matching
+// SurfaceFuelConsumption — an infinite fuel load is not a stand with a great
+// deal of fuel in it, and it would reach eq. 69 as an infinite intensity. A NaN
+// in a driver the fuel reads propagates, which is cffdrs' behaviour too.
+func CrownFuelConsumption(code string, cfl, cfb, pc, pdf float64) float64 {
+	canonical, known := CanonicalFuelCode(code)
+	if !known {
+		return 0
+	}
+
+	cfc := cfl * cfb // eq. 66a
+	switch canonical {
+	case "M1", "M2":
+		cfc *= pc / 100 // eq. 66b
+	case "M3", "M4":
+		cfc *= pdf / 100 // eq. 66c
+	}
+
+	if math.IsInf(cfc, 0) {
+		return math.NaN()
+	}
+	return cfc
+}
+
+// TotalFuelConsumption is TFC in kg/m² (ST-X-3 eq. 67): the surface fuel
+// consumption plus the crown fuel consumption.
+//
+// The arguments are in the reference implementation's own order — fuel, CFL,
+// CFB, SFC, PC, PDF. SFC is a parameter rather than something computed here for
+// the reason CFL is: a caller that already has it from SurfaceFuelConsumption
+// should not pay for it twice, and one that has a measured value should be able
+// to use it.
+//
+// An unknown fuel code returns 0 rather than the surface consumption alone. That
+// composes with SurfaceFuelConsumption, which returns 0 for the same code, and
+// it avoids reporting a confident surface-only total for a fuel this package
+// could not classify — a number that would look entirely ordinary downstream.
+//
+// A non-finite result returns NaN, as above.
+func TotalFuelConsumption(code string, cfl, cfb, sfc, pc, pdf float64) float64 {
+	if _, known := CanonicalFuelCode(code); !known {
+		return 0
+	}
+	tfc := sfc + CrownFuelConsumption(code, cfl, cfb, pc, pdf) // eq. 67
+	if math.IsInf(tfc, 0) {
+		return math.NaN()
+	}
+	return tfc
 }

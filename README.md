@@ -131,6 +131,9 @@ rate alone is the wrong number for "how fast is this coming at *me*". See
   GLC-X-10's revised C1
 - `FoliarMoistureContent` (FMC) and `DateOfMinimumFoliarMoisture` (D0) — foliar
   moisture from latitude, longitude, elevation and the day of the year
+- `CrownFuelConsumption` (CFC) and `TotalFuelConsumption` (TFC) — the crown fuel
+  a fire consumed and the surface-plus-crown total, with the M1/M2 percent-conifer
+  and M3/M4 percent-dead-fir weightings the 2009 revision added
 
 ## Fuel codes
 
@@ -267,7 +270,9 @@ absent. FMC and SFC are no longer on this list — `FoliarMoistureContent` and
 functions you call, not defaults `Crown` applies. The CBH/CFL gap has teeth:
 there is no crown base height or crown fuel load source inside this package, so a
 caller must bring its own — and CFL is what keeps the fuels with no crown (D1,
-S1–S3, O1A, O1B) reporting zero.
+S1–S3, O1A, O1B) reporting zero. `CrownFuelConsumption` inherits that exactly:
+it multiplies by the CFL you hand it and applies no per-fuel gate of its own, so
+passing the published 0 for those fuels is what gives you 0 back.
 
 **C6 on sloped ground.** C6's crown rate of spread is implemented (above), but
 the slope back-solve for that fuel is not, and the two are separate gaps.
@@ -278,9 +283,10 @@ with FMC and CBH, and no surface-only inversion reproduces it.
 exactly; on a slope, feed `C6CrownFire` an ISI you trust rather than one
 back-solved here.
 
-Also absent: CFC, TFC and HFI, the acceleration model, and everything else
-`cffdrs::fbp()` returns that is not spread geometry. TFC's surface half is
-unblocked now that SFC exists; its crown half still needs CFL.
+Also absent: HFI, the acceleration model, and everything else `cffdrs::fbp()`
+returns that is not spread geometry. CFC and TFC came off this list on
+2026-09-20; HFI is `300·TFC·ROS` and is the one thing that was genuinely waiting
+on them.
 
 The three paragraphs above are a summary. [MIGRATION.md](MIGRATION.md) is the
 full account: every file in `cffdrs`'s `R/` with a status, what is deliberately
@@ -351,7 +357,7 @@ the pinned oracle on 2026-09-18; see `ROSAtAngle`'s doc comment and
 [MIGRATION.md](MIGRATION.md).
 
 **The `Go` workflow does not run the oracle.** The 10.9 MB fixture is generated
-rather than committed, so the eighteen fixture-backed tests skip on a fresh clone
+rather than committed, so the nineteen fixture-backed tests skip on a fresh clone
 and a green `Go` badge means the identities, round-trips, invariants and NaN
 sweeps pass.
 
