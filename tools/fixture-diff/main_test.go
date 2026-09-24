@@ -243,3 +243,87 @@ func TestIdenticalDuplicateRowsAreHarmlessNotAmbiguous(t *testing.T) {
 		t.Errorf("harmless duplicates raised the untrustworthy alarm:\n%s", out)
 	}
 }
+
+// fwiRow builds one row of the FWI System's section, the way the generator
+// writes a chain day: kind, chain and day identify it, weather is input.
+func fwiRow(chain string, day float64, ffmc float64) map[string]any {
+	return map[string]any{
+		"kind": "chain", "chain": chain, "day": day, "lat_adjust": true, "mon": 7.0,
+		"lat": 62.0, "temp": 20.0, "rh": 40.0, "ws": 10.0, "prec": 0.0, "ffmc": ffmc,
+	}
+}
+
+// The FWI block is new in a fixture regenerated on 2026-09-24, and the old one
+// has no fwi_cases at all. That is a new section, not a move: the FBP verdict
+// must stand on its own and the exit status must be 0.
+func TestANewFWISectionIsNotAMove(t *testing.T) {
+	oldFx := mk("old", "1.9.2", kase("C1", 90, 40, map[string]any{"ros": 5.0}))
+	newFx := mk("new", "1.9.2", kase("C1", 90, 40, map[string]any{"ros": 5.0}))
+	newFx.FWICases = []map[string]any{fwiRow("se", 1, 88), fwiRow("se", 2, 89)}
+
+	rep := compare(oldFx, newFx, 0, 3)
+	if rep.anyMoved() {
+		t.Fatalf("a new section reported movement: %v / %v", rep.Moved, rep.FWI.Moved)
+	}
+	if rep.FWI == nil || !rep.FWI.NewSection || rep.FWI.NewCases != 2 {
+		t.Fatalf("FWI section = %+v, want a new section of 2 cases", rep.FWI)
+	}
+	var sb strings.Builder
+	printReport(&sb, rep)
+	if !strings.Contains(sb.String(), "new section: 2 cases") ||
+		!strings.Contains(sb.String(), "No column shared by both fixtures moved.") {
+		t.Errorf("report:\n%s", sb.String())
+	}
+}
+
+// A pre-FWI pair says nothing about FWI at all, so the report for the fixtures
+// this tool was written against is unchanged.
+func TestAPreFWIPairHasNoFWISection(t *testing.T) {
+	a := mk("old", "1.9.2", kase("C1", 90, 40, map[string]any{"ros": 5.0}))
+	if rep := compare(a, a, 0, 3); rep.FWI != nil {
+		t.Errorf("FWI section on a pair with no fwi_cases: %+v", rep.FWI)
+	}
+}
+
+// A moved FWI number is caught, named with its section, and fails the exit
+// status even though every FBP column held. Chain days share their weather
+// here, so this also checks day is part of the key: without it the two rows
+// would collide and the move could not be attributed.
+func TestAMovedFWINumberIsCaught(t *testing.T) {
+	oldFx := mk("old", "1.9.2", kase("C1", 90, 40, map[string]any{"ros": 5.0}))
+	newFx := mk("new", "1.9.2", kase("C1", 90, 40, map[string]any{"ros": 5.0}))
+	oldFx.FWICases = []map[string]any{fwiRow("se", 1, 88), fwiRow("se", 2, 89)}
+	newFx.FWICases = []map[string]any{fwiRow("se", 1, 88), fwiRow("se", 2, 89.5)}
+
+	rep := compare(oldFx, newFx, 0, 3)
+	if len(rep.Moved) != 0 {
+		t.Errorf("FBP moved: %v", rep.Moved)
+	}
+	if !rep.anyMoved() || rep.FWI == nil {
+		t.Fatal("an FWI move was not reported")
+	}
+	if rep.FWI.AmbiguousOld != 0 || rep.FWI.DuplicateOld != 0 {
+		t.Errorf("chain days collided under the key: ambiguous %d, duplicate %d",
+			rep.FWI.AmbiguousOld, rep.FWI.DuplicateOld)
+	}
+	if st := find(rep.FWI, "ffmc"); st.Status != "moved" || st.Moved != 1 {
+		t.Errorf("ffmc = %+v, want moved in exactly one case", st)
+	}
+	var sb strings.Builder
+	printReport(&sb, rep)
+	if !strings.Contains(sb.String(), "MOVED: fwi_cases.ffmc") {
+		t.Errorf("the move is not named with its section:\n%s", sb.String())
+	}
+}
+
+// A regeneration that dropped the FWI block is a lost assertion, and a lost
+// assertion is a move.
+func TestADroppedFWISectionIsAMove(t *testing.T) {
+	oldFx := mk("old", "1.9.2", kase("C1", 90, 40, map[string]any{"ros": 5.0}))
+	newFx := mk("new", "1.9.2", kase("C1", 90, 40, map[string]any{"ros": 5.0}))
+	oldFx.FWICases = []map[string]any{fwiRow("se", 1, 88)}
+
+	if rep := compare(oldFx, newFx, 0, 3); !rep.anyMoved() {
+		t.Error("losing the whole FWI section was not reported as a move")
+	}
+}

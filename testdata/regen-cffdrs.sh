@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Regenerate testdata/cffdrs.json, the FBP reference fixture that every Go
-# TestCFFDRS* asserts against.
+# Regenerate testdata/cffdrs.json, the FBP and FWI System reference fixture that
+# every Go TestCFFDRS* -- in package fbp and in package fwi -- asserts against.
 #
 # The fixture is NOT committed -- see testdata/README.md -- so those tests skip
 # until you generate it. Generate it once and they read it with no R involved.
@@ -140,5 +140,5 @@ echo
 echo "Fixture after:"
 fixture_versions
 echo
-echo "Now read the diff, then:  go test . -v -run TestCFFDRS"
+echo "Now read the diff, then:  go test ./... -v -run TestCFFDRS"
 echo "A changed reference number is the oracle disagreeing with this package."

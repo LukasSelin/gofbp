@@ -64,14 +64,20 @@ const (
 )
 
 // change is one changed upstream file, joined to the ledger row that claims it.
+//
+// One changed file can produce two of these. initial_spread_index.r is two ledger
+// rows — FBP's ISI in package fbp and the FWI System's in package fwi, one per
+// value of fbpMod — and a change to it may move either, so each row gets its own
+// line and its own severity rather than the join quietly picking one.
 type change struct {
-	File   string `json:"file"`
-	Status string `json:"change"`          // added | modified | removed | renamed
-	Row    string `json:"row,omitempty"`   // the ledger status symbol, "" if unknown
-	Note   string `json:"note,omitempty"`  // the ledger's own note for the row
-	GoFile string `json:"gofbp,omitempty"` // what the ledger says implements it
-	Line   int    `json:"line,omitempty"`  // where in the ledger
-	Known  bool   `json:"known"`           // false = an R/ file with no row at all
+	File    string `json:"file"`
+	Variant string `json:"variant,omitempty"` // which row, when a file has several
+	Status  string `json:"change"`            // added | modified | removed | renamed
+	Row     string `json:"row,omitempty"`     // the ledger status symbol, "" if unknown
+	Note    string `json:"note,omitempty"`    // the ledger's own note for the row
+	GoFile  string `json:"gofbp,omitempty"`   // what the ledger says implements it
+	Line    int    `json:"line,omitempty"`    // where in the ledger
+	Known   bool   `json:"known"`             // false = an R/ file with no row at all
 }
 
 type report struct {
@@ -171,19 +177,21 @@ func classify(rep *report, files []changedFile, l *ledger.Ledger) {
 			continue
 		}
 		base := strings.TrimPrefix(f.Path, "R/")
-		c := change{File: base, Status: f.Status}
 		// Upstream is inconsistent about case — Slopecalc.r, CFBcalc.r, gfmcRaster.R
 		// — so the join folds it rather than reporting a known file as unknown.
-		if row, ok := lookupFold(byFile, base); ok {
-			c.Known = true
-			c.Row = row.Status
-			c.Note = row.Note
-			c.Line = row.Line
+		rows, ok := lookupFold(byFile, base)
+		if !ok {
+			rep.InR = append(rep.InR, change{File: base, Status: f.Status})
+			continue
+		}
+		for _, row := range rows {
+			c := change{File: base, Variant: row.Variant, Status: f.Status,
+				Known: true, Row: row.Status, Note: row.Note, Line: row.Line}
 			if names := ledger.Backticked(row.Note); len(names) > 0 {
 				c.GoFile = names[0]
 			}
+			rep.InR = append(rep.InR, c)
 		}
-		rep.InR = append(rep.InR, c)
 	}
 
 	sort.SliceStable(rep.InR, func(i, j int) bool {
@@ -230,7 +238,7 @@ func severity(c change) int {
 	}
 }
 
-func lookupFold(byFile map[string]ledger.Row, name string) (ledger.Row, bool) {
+func lookupFold(byFile map[string][]ledger.Row, name string) ([]ledger.Row, bool) {
 	if r, ok := byFile[name]; ok {
 		return r, true
 	}
@@ -239,7 +247,7 @@ func lookupFold(byFile map[string]ledger.Row, name string) (ledger.Row, bool) {
 			return r, true
 		}
 	}
-	return ledger.Row{}, false
+	return nil, false
 }
 
 // --- where the facts come from ----------------------------------------------
@@ -300,7 +308,7 @@ func (s source) changedLocal(pin, head string) ([]changedFile, int, bool, error)
 	}
 	count, _ := s.git("rev-list", "--count", pin+".."+head)
 	n := 0
-	fmt.Sscanf(strings.TrimSpace(count), "%d", &n)
+	_, _ = fmt.Sscanf(strings.TrimSpace(count), "%d", &n)
 	return files, n, false, nil
 }
 
@@ -415,7 +423,7 @@ func (s source) get(url, accept string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if err != nil {
 		return nil, err
@@ -460,7 +468,7 @@ func emit(rep *report, asJSON bool) {
 }
 
 func printReport(w io.Writer, rep *report) {
-	p := func(f string, a ...any) { fmt.Fprintf(w, f, a...) }
+	p := func(f string, a ...any) { _, _ = fmt.Fprintf(w, f, a...) }
 
 	p("pinned  %s  (last read %s)\n", short(rep.Pin), rep.PinChecked)
 	p("head    %s  (%s)\n", short(rep.Head), rep.Remote)
@@ -496,7 +504,7 @@ func printReport(w io.Writer, rep *report) {
 			if !c.Known {
 				row = "??"
 			}
-			p("  %s  %-36s %s\n", row, c.File, c.Status)
+			p("  %s  %-36s %s\n", row, ledger.Key(c.File, c.Variant), c.Status)
 			switch {
 			case !c.Known:
 				p("      not a row in the ledger at all. The inventory is stale: add the row\n" +

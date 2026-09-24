@@ -5,27 +5,36 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/LukasSelin/gofbp.svg)](https://pkg.go.dev/github.com/LukasSelin/gofbp)
 
 The Canadian Forest Fire Behaviour Prediction (FBP) System's head-fire rate of
-spread, in Go. Zero dependencies — the whole package imports `math` and nothing
-else. Checked against `cffdrs`, the Canadian Forest Service's own R
-implementation.
+spread, in Go — and, in a package of its own beside it, the daily Canadian Fire
+Weather Index (FWI) System that produces FBP's inputs. Zero dependencies — each
+package imports `math` and nothing else, not even the other. Both checked against
+`cffdrs`, the Canadian Forest Service's own R implementation.
 
 ```
 go get github.com/LukasSelin/gofbp
 ```
 
-The module is `gofbp`; the package is `fbp`. So
+The module is `gofbp` and holds two packages:
+
+| Import | Package | What it is |
+|---|---|---|
+| `github.com/LukasSelin/gofbp` | `fbp` | the FBP System: rate of spread and fire behaviour |
+| `github.com/LukasSelin/gofbp/fwi` | `fwi` | the FWI System: FFMC, DMC, DC, ISI, BUI, FWI, DSR from daily weather |
+
 `import "github.com/LukasSelin/gofbp"` binds the identifier `fbp`, and no alias
-is needed.
+is needed. Most of this README is about `fbp`; see
+[The FWI System: package `fwi`](#the-fwi-system-package-fwi) for the other one.
 
 ## What this is
 
-The FBP System as published: ST-X-3's equations and coefficient tables, plus the
-revisions the Canadian Forest Service published in 2009 (the grass curing
-function, and the M3/M4 dead-balsam-fir mixedwoods) — with no local adaptation,
-no defaults chosen for a particular country, and no judgement about what the
-ground is made of. That constraint is the point — the
-claim "this is the Canadian FBP System, unmodified" is only checkable if the
-package making it contains nothing else.
+Package `fbp` is the FBP System as published: ST-X-3's equations and coefficient
+tables, plus the revisions the Canadian Forest Service published in 2009 (the
+grass curing function, and the M3/M4 dead-balsam-fir mixedwoods) — with no local
+adaptation, no defaults chosen for a particular country, and no judgement about
+what the ground is made of. That constraint is the point — the claim "this is
+the Canadian FBP System, unmodified" is only checkable if the package making it
+contains nothing else. So the FWI System is not in it: FBP takes FFMC and BUI
+as given, and package `fwi` is where they can come from.
 
 What it produces is a **rate of spread in metres per minute**: a physical
 quantity, not a danger score. A fire-danger index is a unitless number whose
@@ -34,6 +43,10 @@ it checkable against observed fire behaviour. They answer different questions �
 *how dangerous are conditions today* versus *if it starts here, how fast does it
 move* — and multiplying one by the other destroys both. Do not fold this into an
 index.
+
+The FWI is exactly such an index, which is why it lives in a different package.
+Having both in one module makes it easy to compute them side by side; it does
+not make them combinable.
 
 Everything local — which fuel type a stand maps to, what curing to assume, what
 to do with wetland — is the caller's, and reaches the package as the fuel code
@@ -116,7 +129,7 @@ rate alone is the wrong number for "how fast is this coming at *me*". See
   grass curing factor
 - `BuildupEffect` (BE), `SlopeFactor` (SF), `SlopePercentFromDegrees`
 - `ISI` — the FWI System's Initial Spread Index with FBP's high-wind wind
-  function
+  function (which makes it a different function from `fwi.ISI`; see below)
 - `EquivalentWind` and `NetEffectiveWind` — the slope back-solve (WSE, WSV, RAZ)
 - `ROS` — head-fire rate of spread
 - The fire ellipse: `LengthToBreadth`, `BackISIRatio`, `FlankROS`, `ROSAtAngle`,
@@ -134,6 +147,79 @@ rate alone is the wrong number for "how fast is this coming at *me*". See
 - `CrownFuelConsumption` (CFC) and `TotalFuelConsumption` (TFC) — the crown fuel
   a fire consumed and the surface-plus-crown total, with the M1/M2 percent-conifer
   and M3/M4 percent-dead-fir weightings the 2009 revision added
+
+## The FWI System: package `fwi`
+
+```go
+import "github.com/LukasSelin/gofbp/fwi"
+```
+
+The daily Canadian Forest Fire Weather Index System, ported from cffdrs'
+`fwi()` and its six component functions: one pure function per code, each taking
+yesterday's value and today's weather — `FFMC`, `DMC`, `DC` — then `ISI`, `BUI`,
+`FWI` and `DSR` from those, plus `DMCDayLength` and `DCDayLength`, the
+latitude-adjusted day-length factors `fwi()` applies (`lat.adjust = TRUE`).
+`Step` chains one day exactly the way one iteration of `fwi()`'s loop does,
+including the one thing `fwi()` does that the codes do not: relative humidity
+at or above 100 % becomes 99.9999 before any code sees it.
+
+```go
+s := fwi.StartupState() // FFMC 85, DMC 6, DC 15 — your choice, not a default
+for _, day := range days {
+	var ix fwi.Indices
+	s, ix = fwi.Step(s, fwi.Weather{
+		TempC:    day.NoonTempC,
+		RHPct:    day.NoonRH,
+		WindKmh:  day.NoonWindMS * 3.6, // km/h, not m/s
+		PrecipMm: day.Precip24hMm,      // 24 h to noon, not hourly
+	}, day.Month, lat)
+	use(ix.FFMC, ix.BUI, ix.FWI)
+}
+```
+
+`fwi.ISI` is **not** `fbp.ISI`. They share a name and a source file
+(`initial_spread_index.r`), but the FWI System's uses `exp(0.05039·wind)` at every
+wind speed where FBP's switches to a saturating high-wind function at 40 km/h —
+at 60 km/h the FWI System's is about 1.85 times FBP's. Feed FBP `fbp.ISI`.
+
+**Units** are cffdrs', and not the ones weather data usually arrives in:
+
+| Quantity | Unit |
+|---|---|
+| Temperature | °C, at local noon |
+| Relative humidity | %, at local noon |
+| Wind speed | **km/h**, 10 m open wind, at local noon — multiply m/s by 3.6 |
+| Precipitation | **mm over the 24 h ending at local noon** — not hourly, not metres |
+| Month | 1–12 |
+| Latitude | degrees, north positive |
+
+Getting the last two rows wrong is silent. An hour's rain passed as the day's
+total falls under the rain thresholds (0.5, 1.5 and 2.8 mm) almost every time,
+so the codes never wet and the season looks drier every day it goes on.
+
+**What it deliberately is not:** a time-series driver. There is no loop over
+days, no gridding, no start-of-season or overwintering logic, and no default for
+a missing latitude or month (`fwi()` falls back to 55 °N and July with only a
+warning). Where a season starts, what the codes start from, and what to do across
+a gap in the weather are the caller's decisions, next to the data that decides
+them — `StartupFFMC`, `StartupDMC` and `StartupDC` are exported so the
+conventional start is something you pass rather than inherit. `fwi()`'s refusal
+of negative precipitation, wind or humidity is `Step` returning NaN in every field.
+
+**Where it follows cffdrs rather than Van Wagner (1987)**, and is checked to: the
+latitude-adjusted day lengths (identical to the 1987 tables north of 30 °N, so
+all of Canada and Scandinavia see no difference); FFMC's exact moisture constant;
+the altered DMC rain equations, which cost about 0.11 % of DMC per rain day
+against the paper; FFMC clamped to [0, 101]; and the RH clamp in `Step`. The
+package doc and [MIGRATION.md](MIGRATION.md) list each with its evidence.
+
+**Correctness.** Nine `TestCFFDRS*` assert it against the same pinned oracle as
+`fbp`: every component over grids that reach every branch (each rain threshold
+from both sides, both temperature floors, RH 0 and 100, zero and 150 km/h wind,
+every month, every `lat.adjust` band of both the DMC and the DC), 3,420 one-day
+`fwi()` runs, ten chains of 40 to 120 days through `fwi()` itself with the Go
+carrying its own state, and cffdrs' own `test_fwi` sample. The worst relative
+error anywhere is 1e-14.
 
 ## Fuel codes
 
@@ -356,8 +442,8 @@ and yields `ROS` at both 0° and 180° so `BROS` never comes back. Measured agai
 the pinned oracle on 2026-09-18; see `ROSAtAngle`'s doc comment and
 [MIGRATION.md](MIGRATION.md).
 
-**The `Go` workflow does not run the oracle.** The 10.9 MB fixture is generated
-rather than committed, so the nineteen fixture-backed tests skip on a fresh clone
+**The `Go` workflow does not run the oracle.** The 15.8 MB fixture is generated
+rather than committed, so the twenty-eight fixture-backed tests skip on a fresh clone
 and a green `Go` badge means the identities, round-trips, invariants and NaN
 sweeps pass.
 
@@ -428,7 +514,7 @@ and how to read a regeneration.
 
 Issues and pull requests welcome. `go test ./...` is the whole build. A change to
 any coefficient or equation needs the oracle: regenerate the fixture, run
-`go test . -run TestCFFDRS`, and say in the PR what the reference numbers did.
+`go test ./... -run TestCFFDRS`, and say in the PR what the reference numbers did.
 
 To port something still missing, start from [MIGRATION.md](MIGRATION.md)'s
 dependency order rather than from whichever row looks smallest, and decide how

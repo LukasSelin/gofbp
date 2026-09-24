@@ -48,7 +48,12 @@ jobs:
     # Test files are out of scope. The fixture tests read testdata and shell out
     # to Docker, which is fine, and is not what a consumer links.
     #
-    # `.` and not `./...`, for the same reason. This was ./... when the module
+    # `.,./fwi` -- the two packages a consumer can import, fbp and fwi, and
+    # nothing else. fwi joined on 2026-09-24 under the same empty set: it is
+    # arithmetic on floats exactly as fbp is. A comma list, and checked to reach
+    # the second package: `.,./tools/precheck` fails this step as it should.
+    #
+    # Not `./...`, for the same reason test files are out. This was ./... when the module
     # was a single package and the two meant the same thing. They no longer do:
     # tools/ holds command-line programs that read files, call GitHub and shell
     # out to git and docker -- that IS their job -- and internal/ledger reads
@@ -61,4 +66,4 @@ jobs:
       run: |
         go install github.com/google/capslock/cmd/capslock@v0.3.3
         echo '{}' > "$RUNNER_TEMP/no-capabilities.json"
-        capslock -packages=. -output=compare "$RUNNER_TEMP/no-capabilities.json"
+        capslock -packages=.,./fwi -output=compare "$RUNNER_TEMP/no-capabilities.json"

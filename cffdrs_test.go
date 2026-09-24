@@ -215,7 +215,7 @@ func TestCFFDRSSlopeFactor(t *testing.T) {
 // the fixture's rows at WS = 50 are what exercise the second branch (without it
 // the error there reaches 0.242).
 //
-// ledger: initial_spread_index.r
+// ledger: initial_spread_index.r (fbpMod = TRUE)
 func TestCFFDRSInitialSpreadIndex(t *testing.T) {
 	f := loadCFFDRS(t)
 	const tol = 1e-12

@@ -38,6 +38,30 @@ import (
 
 const ledgerPath = "MIGRATION.md"
 
+// goPackageDirs are the module's two public packages: fbp at the root and fwi
+// beside it. Every check below that reads Go files reads both, because the
+// ledger's claims cover both — and a check that only globbed the root would pass
+// by not looking at the package that was added second.
+var goPackageDirs = []string{".", "fwi"}
+
+// globPackages returns pattern matched in every public package directory, with
+// forward slashes so a path reads the way MIGRATION.md writes it (`fwi/fwi.go`)
+// on Windows too.
+func globPackages(t *testing.T, pattern string) []string {
+	t.Helper()
+	var out []string
+	for _, dir := range goPackageDirs {
+		matches, err := filepath.Glob(filepath.Join(dir, pattern))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, m := range matches {
+			out = append(out, filepath.ToSlash(m))
+		}
+	}
+	return out
+}
+
 func load(t *testing.T) *ledger.Ledger {
 	t.Helper()
 	l, err := ledger.Load(ledgerPath)
@@ -67,11 +91,12 @@ func TestLedgerParses(t *testing.T) {
 		if r.Concept == "" {
 			t.Errorf("%s: no concept", r)
 		}
-		for _, f := range r.Files {
-			if prev, dup := seen[f]; dup {
-				t.Errorf("%s: %s is also claimed by the row at line %d — a file cannot have two statuses", r, f, prev)
+		for _, k := range r.Keys() {
+			if prev, dup := seen[k]; dup {
+				t.Errorf("%s: %s is also claimed by the row at line %d — a file cannot have two statuses. "+
+					"If it is genuinely two concepts, give each row a variant: `file.r` (`which one`)", r, k, prev)
 			}
-			seen[f] = r.Line
+			seen[k] = r.Line
 		}
 
 		// "⚪ — the reason is the row's whole content." A ⚪ row with an empty note
@@ -82,6 +107,21 @@ func TestLedgerParses(t *testing.T) {
 				"content — if you cannot restate it in a sentence, it is not out of scope, "+
 				"it is unported. Whether the reason is still a good one is step 4's job, "+
 				"not this test's.", r)
+		}
+	}
+
+	// A file split across rows must be split all the way: every row claiming it
+	// names its variant. One bare row beside a variant row would make the bare
+	// name ambiguous — a `ledger:` marker or a reader could not tell whether it
+	// meant the bare row or the file as a whole.
+	for f, rows := range l.ByFile() {
+		if len(rows) < 2 {
+			continue
+		}
+		for _, r := range rows {
+			if r.Variant == "" {
+				t.Errorf("%s: %s is claimed by %d rows, and this one names no variant", r, f, len(rows))
+			}
 		}
 	}
 }
@@ -99,15 +139,12 @@ var oracleMarker = regexp.MustCompile(`(?m)^ledger:\s*(.+)$`)
 // oracle coverage: deleting the test breaks this, and so does renaming the row.
 func TestLedgerOracleClaimsAreBackedByTests(t *testing.T) {
 	l := load(t)
+	byKey := l.ByKey()
 	byFile := l.ByFile()
 
-	assertedBy := map[string][]string{} // upstream file -> test names
+	assertedBy := map[string][]string{} // row key -> test names
 	fset := token.NewFileSet()
-	matches, err := filepath.Glob("*_test.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, path := range matches {
+	for _, path := range globPackages(t, "*_test.go") {
 		f, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
 		if err != nil {
 			t.Fatalf("parse %s: %v", path, err)
@@ -140,8 +177,18 @@ func TestLedgerOracleClaimsAreBackedByTests(t *testing.T) {
 			}
 			for _, name := range strings.Split(marker, ",") {
 				name = strings.TrimSpace(name)
-				row, known := byFile[name]
+				row, known := byKey[name]
 				if !known {
+					if rows := byFile[name]; len(rows) > 1 {
+						var keys []string
+						for _, r := range rows {
+							keys = append(keys, r.Keys()[0])
+						}
+						t.Errorf("%s: %s claims to assert %q, which is %d rows in %s. Name the one it "+
+							"asserts: %s", fset.Position(fn.Pos()), fn.Name.Name, name, len(rows),
+							ledgerPath, strings.Join(keys, " or "))
+						continue
+					}
 					t.Errorf("%s: %s claims to assert %q, which is not a row in %s",
 						fset.Position(fn.Pos()), fn.Name.Name, name, ledgerPath)
 					continue
@@ -161,8 +208,8 @@ func TestLedgerOracleClaimsAreBackedByTests(t *testing.T) {
 			continue
 		}
 		covered := false
-		for _, f := range r.Files {
-			if len(assertedBy[f]) > 0 {
+		for _, k := range r.Keys() {
+			if len(assertedBy[k]) > 0 {
 				covered = true
 			}
 		}
@@ -194,14 +241,20 @@ func TestLedgerDependencyOrderIsComplete(t *testing.T) {
 	listed := map[string]bool{}
 	for _, name := range l.DependencyOrder {
 		listed[name] = true
-		row, known := byFile[name]
+		rows, known := byFile[name]
 		if !known {
 			t.Errorf("the dependency order names %q, which is not a row in the R/ table", name)
 			continue
 		}
-		if row.Status != ledger.Missing && row.Status != ledger.Partial {
-			t.Errorf("the dependency order still lists %q, but its row is %q — "+
-				"work that is done should come off the list", name, row.Status)
+		owed := false
+		for _, row := range rows {
+			if row.Status == ledger.Missing || row.Status == ledger.Partial {
+				owed = true
+			}
+		}
+		if !owed {
+			t.Errorf("the dependency order still lists %q, but no row for it is 🔴 or 🟡 — "+
+				"work that is done should come off the list", name)
 		}
 	}
 
@@ -236,11 +289,7 @@ func TestLedgerCoversEveryGoFile(t *testing.T) {
 	text := string(raw)
 
 	fset := token.NewFileSet()
-	matches, err := filepath.Glob("*.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, path := range matches {
+	for _, path := range globPackages(t, "*.go") {
 		if strings.HasSuffix(path, "_test.go") {
 			continue
 		}
@@ -422,12 +471,13 @@ func TestPackageHasNoDependencies(t *testing.T) {
 		}
 	}
 
+	// Both public packages, and the same rule for each. That rule is also what
+	// keeps fbp and fwi apart: an import of the other package is an import that
+	// is not `math`, so neither can start depending on the other without this
+	// failing — which is the promise that keeps package fbp the FBP System and
+	// nothing else.
 	fset := token.NewFileSet()
-	matches, err := filepath.Glob("*.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, path := range matches {
+	for _, path := range globPackages(t, "*.go") {
 		if strings.HasSuffix(path, "_test.go") {
 			continue
 		}
@@ -469,13 +519,11 @@ func TestFixtureIsNotCommitted(t *testing.T) {
 // tell a reader how many fixture-backed tests they are missing without one, and
 // the commands a session follows may come to say it too.
 func TestDocsAgreeOnTheNumberOfOracleTests(t *testing.T) {
+	// Counted across both packages: the docs tell a reader how many tests skip
+	// without a fixture, and fwi's skip for exactly the same reason fbp's do.
 	fset := token.NewFileSet()
-	matches, err := filepath.Glob("*_test.go")
-	if err != nil {
-		t.Fatal(err)
-	}
 	actual := 0
-	for _, path := range matches {
+	for _, path := range globPackages(t, "*_test.go") {
 		f, err := parser.ParseFile(fset, path, nil, 0)
 		if err != nil {
 			t.Fatalf("parse %s: %v", path, err)
@@ -487,24 +535,33 @@ func TestDocsAgreeOnTheNumberOfOracleTests(t *testing.T) {
 		}
 	}
 
+	// Spelled out to fifty. Past twenty that means hyphenated compounds —
+	// "twenty-eight" — which is why the pattern below takes hyphens: without
+	// them it would read "twenty-eight" as "eight" and report a wrong count as
+	// the right one.
 	words := map[int]string{
 		1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six", 7: "seven",
 		8: "eight", 9: "nine", 10: "ten", 11: "eleven", 12: "twelve", 13: "thirteen",
 		14: "fourteen", 15: "fifteen", 16: "sixteen", 17: "seventeen", 18: "eighteen",
-		19: "nineteen", 20: "twenty",
+		19: "nineteen", 20: "twenty", 30: "thirty", 40: "forty", 50: "fifty",
+	}
+	for tens := 20; tens < 50; tens += 10 {
+		for unit := 1; unit <= 9; unit++ {
+			words[tens+unit] = words[tens] + "-" + words[unit]
+		}
 	}
 	isCount := map[string]bool{}
 	for _, w := range words {
 		isCount[w] = true
 	}
-	for i := 0; i <= 20; i++ {
+	for i := 0; i <= 50; i++ {
 		isCount[fmt.Sprint(i)] = true
 	}
 
 	// Deliberately narrow: README.md also says "the fifteen fuel types", which is a
 	// different fifteen and must not be caught here. A word that is not a number at
 	// all ("the TestCFFDRS* tests") is prose, not a count.
-	counted := regexp.MustCompile(`(\w+) (fixture-backed tests|TestCFFDRS\* tests)`)
+	counted := regexp.MustCompile(`([\w-]+) (fixture-backed tests|TestCFFDRS\* tests)`)
 
 	// The four fixed files are required. The commands are globbed rather than
 	// listed so a new one is covered the day it lands, and because a stale count

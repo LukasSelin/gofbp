@@ -1,4 +1,8 @@
-# Emit the FBP reference fixture from the cffdrs R package.
+# Emit the FBP and FWI System reference fixture from the cffdrs R package.
+#
+# FBP is the whole of this file up to "=== The FWI System ===", and lands in the
+# fixture's "cases"; the FWI System is the block after it, and lands in
+# "fwi_cases". The two share nothing but the file and the pins.
 #
 #   testdata/regen-cffdrs.sh
 #
@@ -488,13 +492,382 @@ case_json <- function(i) {
 }
 
 body <- paste(vapply(seq_len(nrow(inp)), case_json, character(1)), collapse = ",\n")
+
+# === The FWI System ========================================================
+#
+# Everything above is FBP and lands in "cases". Everything below is the daily
+# Fire Weather Index System, which package fwi (fwi/) ports, and lands in a
+# SEPARATE top-level array, "fwi_cases". Separate on purpose, three ways over:
+#
+#   - The "cases" rows above come out byte-identical to a fixture generated
+#     before this block existed, so tools/fixture-diff over the FBP section can
+#     say "no column moved" and mean it.
+#   - No row down here carries a "fuel" key. precheck counts FBP cases by that
+#     substring, and the documented 24,260 is an FBP number.
+#   - The two systems share no input: FBP takes FFMC/BUI as given, and this is
+#     where they come from.
+#
+# What is reached, and how. cffdrs 1.9.2 does not export the six component
+# functions (fine_fuel_moisture_code, duff_moisture_code, drought_code,
+# initial_spread_index, buildup_index, fire_weather_index), so they are called
+# through ::: -- the same bodies fwi() calls, with no driver in between. That is
+# the only way to reach inputs fwi() would refuse or rewrite: fwi() clamps RH to
+# 99.9999 before any code sees it, so RH exactly 100 (and above) is reachable
+# only here. fwi() itself is then run three more ways, because it is what the
+# Go Step claims to match:
+#
+#   kind      what it asserts                              through
+#   ffmc      FFMC, one step                               fine_fuel_moisture_code
+#   dmc       DMC, one step, every lat.adjust band         duff_moisture_code
+#   dc        DC, one step, every lat.adjust band          drought_code
+#   isi       ISI, fbpMod = FALSE                          initial_spread_index
+#   bui       BUI                                          buildup_index
+#   fwi       FWI                                          fire_weather_index
+#   day       one day, all seven outputs incl. DSR         fwi(batch = FALSE)
+#   chain     30-120 day sequences, state carried          fwi(batch = TRUE)
+#   test_fwi  cffdrs' own 48-day sample dataset            fwi(test_fwi)
+#
+# Input columns are named so they never collide with an output column of the
+# same name: the ISI grid's FFMC is ffmc_in, not ffmc, because ffmc is what the
+# FFMC rows OUTPUT. tools/fixture-diff keys on the input set, and a name doing
+# both jobs would key some rows on an output.
+
+# The rain thresholds, read off the pinned source rather than off a paper: FFMC
+# applies rain only when prec > 0.5, DMC when prec > 1.5 and DC when prec > 2.8,
+# each with <= on the no-rain side. Every block that takes rain puts a row ON
+# the threshold and one just above it, which is where a < for <= would show.
+FWI_COLS_IN <- c("kind", "chain", "day", "lat_adjust", "mon", "lat",
+                 "temp", "rh", "ws", "prec",
+                 "ffmc_yda", "dmc_yda", "dc_yda",
+                 "ffmc_in", "dmc_in", "dc_in", "isi_in", "bui_in")
+FWI_COLS_OUT <- c("ffmc", "dmc", "dc", "isi", "bui", "fwi", "dsr")
+FWI_COLS <- c(FWI_COLS_IN, FWI_COLS_OUT)
+
+fwi_rows <- list()
+fadd <- function(df) {
+  for (col in FWI_COLS) if (!col %in% names(df)) df[[col]] <- NA
+  fwi_rows[[length(fwi_rows) + 1L]] <<- df[, FWI_COLS]
+}
+internal <- function(name) get(name, envir = asNamespace("cffdrs"))
+grid <- function(...) expand.grid(..., KEEP.OUT.ATTRS = FALSE, stringsAsFactors = FALSE)
+
+# --- FFMC ---
+# Every branch of fine_fuel_moisture_code:
+#   rain       prec 0.5 (not applied) against 0.51 (applied)
+#   eq. 3b     wmo > 150 needs yesterday's FFMC below ~20.0 (wmo = 150 at 19.99);
+#              0 and 10 reach it, 20 sits just under it
+#   wmo cap    FFMC 0 is wmo = 250 before any rain, so any rain pushes it over
+#   wetting    a wet yesterday under dry air: FFMC 97-101 at RH 90-100
+#   drying     a moist yesterday under dry air
+#   neither    ew <= wmo <= ed, the equilibrium band; the grid lands some rows
+#              there and the Go side counts them
+#   101 clamp  60 C at low RH drives ed negative, so drying overshoots below
+#              zero moisture. Not weather, but it is the only way the clamp is
+#              reached, and the clamp is in the code.
+# The 0 clamp is NOT reachable and is not attempted: it needs moisture above
+# 250, which needs ew above 250, which needs temp below about -1200 C -- where
+# exp(0.0365 * temp) has already flattened the rate to nothing. The Go side
+# says so rather than leaving the clamp to look covered.
+g <- grid(ffmc_yda = c(0, 10, 20, 50, 70, 85, 92, 97, 101),
+          temp = c(-10, 0, 15, 30, 60),
+          rh = c(0, 5, 20, 45, 70, 90, 100),
+          ws = c(0, 15, 100),
+          prec = c(0, 0.3, 0.5, 0.51, 1, 5, 20, 80))
+g$ffmc <- internal("fine_fuel_moisture_code")(g$ffmc_yda, g$temp, g$rh, g$ws, g$prec)
+g$kind <- "ffmc"
+fadd(g)
+
+# --- DMC ---
+# (a) Weather and rain, at one latitude and month (55 N in July, the Swedish
+# consumer's own band). Branches:
+#   rain       prec 1.5 (not applied) against 1.51 (applied)
+#   eq. 13     b's three pieces: yesterday <= 33, <= 65, > 65, with 33 and 65
+#              themselves on the grid
+#   temp floor -5 is clamped to -1.1, and -1.1 itself is on the grid
+#   pr clamp   heavy rain on a DMC near 0: wmr - 20 exceeds exp(5.6348) and the
+#              log goes past 5.6348, so pr comes out negative (50 and 150 mm)
+#   RH 100     rk = 0 exactly -- no drying at all
+# (b) The final dmc1 < 0 clamp needs rk < 0, which needs RH above 100.
+# fwi() never sends one (it clamps RH first), but the component takes RH as
+# given, and RH derived from dewpoint does exceed 100 in real data.
+g <- grid(dmc_yda = c(0, 5, 20, 33, 40, 65, 90, 200),
+          temp = c(-5, -1.1, 0, 20, 35),
+          rh = c(0, 40, 100),
+          prec = c(0, 1.5, 1.51, 3, 10, 50, 150))
+g <- rbind(g, grid(dmc_yda = c(0, 0.5, 5), temp = 20, rh = c(100.5, 120), prec = 0))
+g$mon <- 7
+g$lat <- 55
+g$lat_adjust <- TRUE
+g$dmc <- internal("duff_moisture_code")(g$dmc_yda, g$temp, g$rh, g$prec, g$lat, g$mon, TRUE)
+g$kind <- "dmc"
+fadd(g)
+
+# (c) The day-length factor, every month in every band, both sides of every
+# boundary. duff_moisture_code's bands (lat.adjust = TRUE):
+#   lat > 30          ell01, the Canadian 46 N table -- Sweden is here
+#   10 < lat <= 30    ell02
+#   -10 < lat <= 10   9 for every month
+#   -30 < lat <= -10  ell03
+#   -90 <= lat <= -30 ell04
+#   lat < -90         ell01 again: none of the four ifelse arms matches, so it
+#                     falls through to the northern default. Invalid input, but
+#                     it is what the code does, and -95 pins it.
+# Upstream's own comments say "latitude >= 30N" for ell01; the code says > 30.
+# 30 is on the grid, so the oracle -- not the comment -- decides.
+# lat.adjust = FALSE uses ell01 everywhere, which is the lat > 30 band; the Go
+# side has no flag and asserts these rows at latitude 46 instead.
+DMC_LATS <- c(-95, -90, -60, -30.5, -30, -29.5, -10.5, -10, -9.5, 0,
+              9.5, 10, 10.5, 29.5, 30, 30.5, 46, 55, 62, 69, 90)
+for (adj in c(TRUE, FALSE)) {
+  g <- grid(lat = DMC_LATS, mon = 1:12)
+  g$dmc_yda <- 20
+  g$temp <- 20
+  g$rh <- 40
+  g$prec <- 0
+  g$lat_adjust <- adj
+  g$dmc <- internal("duff_moisture_code")(g$dmc_yda, g$temp, g$rh, g$prec, g$lat, g$mon, adj)
+  g$kind <- "dmc"
+  fadd(g)
+}
+
+# --- DC ---
+# (a) Weather and rain. Branches:
+#   rain       prec 2.8 (not applied) against 2.81 (applied)
+#   temp floor -10 is clamped to -2.8, which is itself on the grid
+#   pe clamp   January's -1.6 day-length factor at temp 0 or 1 makes pe negative
+#   dr0 clamp  heavy rain on a low DC: 100 mm on DC 0 or 15
+#   RH         DC does not read RH at all. Both extremes are here so a Go port
+#              that used it would be caught rather than agreeing by accident.
+# The final dc1 < 0 clamp is not reachable from a non-negative yesterday: dr and
+# pe are both clamped at zero first.
+g <- grid(dc_yda = c(0, 15, 100, 300, 600, 1000),
+          temp = c(-10, -2.8, 0, 1, 20, 35),
+          rh = c(0, 100),
+          prec = c(0, 2.8, 2.81, 5, 20, 100),
+          mon = c(1, 7))
+g$lat <- 55
+g$lat_adjust <- TRUE
+g$dc <- internal("drought_code")(g$dc_yda, g$temp, g$rh, g$prec, g$lat, g$mon, TRUE)
+g$kind <- "dc"
+fadd(g)
+
+# (b) Day length. drought_code's bands (lat.adjust = TRUE):
+#   lat > 20          fl01 -- Sweden is here
+#   -20 < lat <= 20   1.4 for every month
+#   lat <= -20        fl02 (no lower bound, unlike DMC's ell04)
+# Note the DC and DMC bands do NOT share boundaries: 15 N is DMC's ell02 band and
+# DC's equatorial one. The chains below include a station there.
+DC_LATS <- c(-95, -90, -45, -20.5, -20, -19.5, 0, 19.5, 20, 20.5, 46, 55, 62, 69, 90)
+for (adj in c(TRUE, FALSE)) {
+  g <- grid(lat = DC_LATS, mon = 1:12)
+  g$dc_yda <- 100
+  g$temp <- 20
+  g$rh <- 40
+  g$prec <- 0
+  g$lat_adjust <- adj
+  g$dc <- internal("drought_code")(g$dc_yda, g$temp, g$rh, g$prec, g$lat, g$mon, adj)
+  g$kind <- "dc"
+  fadd(g)
+}
+
+# --- ISI, BUI, FWI ---
+# ISI with fbpMod = FALSE, which is what fwi() passes. The wind grid runs well
+# past 40 km/h on purpose: that is where FBP's high-wind function would take
+# over, and it must NOT here. FFMC runs the full 0-101 range, 0 included --
+# FBP's ISI refuses FFMC 0, the FWI System's does not.
+g <- grid(ffmc_in = c(0, 10, 30, 50, 70, 80, 85, 88, 90, 92, 94, 96, 98, 99, 100, 101),
+          ws = c(0, 5, 10, 20, 30, 39.9, 40, 50, 70, 100, 150))
+g$isi <- internal("initial_spread_index")(g$ffmc_in, g$ws, FALSE)
+g$kind <- "isi"
+fadd(g)
+
+# BUI branches: dmc = dc = 0 (the 0/0 guard); dmc = 0 with dc > 0; dc = 0 with
+# dmc > 0; bui1 >= dmc (dmc <= 0.4 dc) against bui1 < dmc; and bui0 < 0, which a
+# small DMC with little DC reaches (dmc 0.5, 0.9 against cc near 0.92).
+g <- grid(dmc_in = c(0, 0.5, 0.9, 1, 5, 10, 20, 40, 80, 150, 300),
+          dc_in = c(0, 1, 10, 50, 100, 250, 500, 800, 1200))
+g$bui <- internal("buildup_index")(g$dmc_in, g$dc_in)
+g$kind <- "bui"
+fadd(g)
+
+# FWI branches: bui <= 80 against > 80 (79.9, 80, 80.1 all present) and the
+# bb <= 1 identity against the log-power form, with isi = 0 at the bottom.
+g <- grid(isi_in = c(0, 0.5, 1, 2, 5, 10, 20, 50, 100),
+          bui_in = c(0, 1, 10, 40, 79.9, 80, 80.1, 120, 200, 400))
+g$fwi <- internal("fire_weather_index")(g$isi_in, g$bui_in)
+g$kind <- "fwi"
+fadd(g)
+
+# --- fwi() one day ---
+# batch = FALSE makes every row its own station for one day, each with its own
+# yesterday, so this is fwi()'s per-day step -- RH clamp, all six codes and DSR
+# -- over a cross of states, weather, latitudes and months. The weather set is
+# chosen for the thresholds and extremes, not for realism:
+FWI_DAY_WEATHER <- data.frame(
+  temp = c(20, 30, 35, 10, 12, 25, 5, 8, 15, 15, 15, 15, 18, 14, -5, -15, 45),
+  rh = c(40, 15, 0, 100, 100.5, 20, 95, 90, 80, 80, 80, 80, 70, 85, 60, 70, 5),
+  ws = c(15, 25, 0, 5, 5, 150, 10, 10, 10, 10, 10, 10, 20, 30, 10, 5, 40),
+  prec = c(0, 0, 0, 0, 0.2, 0, 0.5, 0.51, 1.5, 1.51, 2.8, 2.81, 10, 45, 0, 3, 0)
+)
+FWI_DAY_STATES <- data.frame(
+  ffmc_yda = c(85, 95, 40, 101, 70),
+  dmc_yda = c(6, 60, 1, 0, 30),
+  dc_yda = c(15, 400, 5, 0, 150)
+)
+run_days <- function(lats, mons, weather, states, adj) {
+  g <- merge(merge(merge(weather, states), data.frame(lat = lats)), data.frame(mon = mons))
+  input <- data.frame(long = -100, lat = g$lat, yr = 2000, mon = g$mon, day = 1,
+                      temp = g$temp, rh = g$rh, ws = g$ws, prec = g$prec)
+  init <- data.frame(ffmc = g$ffmc_yda, dmc = g$dmc_yda, dc = g$dc_yda)
+  o <- fwi(input, init = init, batch = FALSE, out = "fwi", lat.adjust = adj)
+  if (nrow(o) != nrow(g)) stop("fwi() returned ", nrow(o), " rows for ", nrow(g))
+  g$ffmc <- o$FFMC; g$dmc <- o$DMC; g$dc <- o$DC
+  g$isi <- o$ISI; g$bui <- o$BUI; g$fwi <- o$FWI; g$dsr <- o$DSR
+  g$lat_adjust <- adj
+  g$kind <- "day"
+  fadd(g)
+}
+run_days(c(-35, -15, 0, 15, 25, 46, 55, 62, 69), c(1, 4, 7, 10),
+         FWI_DAY_WEATHER, FWI_DAY_STATES, TRUE)
+# lat.adjust = FALSE through the driver too, every month, at latitudes where it
+# differs from TRUE.
+run_days(c(-35, -15, 0, 15, 62), 1:12,
+         FWI_DAY_WEATHER[c(1, 2, 13), ], FWI_DAY_STATES[1:2, ], FALSE)
+
+# --- fwi() chains ---
+# Single steps cannot see state propagation: a Go Step that returned the right
+# day but carried the wrong thing into tomorrow passes every row above. These
+# are whole sequences through fwi() itself, and the Go side chains its own state
+# from the first day's yesterday -- it never reads the oracle's intermediate
+# state.
+#
+# The weather is pseudo-random with a fixed seed and a fixed RNG kind, so it
+# regenerates identically at the pinned R. It is rounded to one decimal so the
+# fixture reads like weather, and it is recorded into the fixture, so the Go
+# side needs no RNG. Rain comes in spells (a two-state Markov chain) so dry
+# spells build the codes up and a wet spell knocks them down, and each chain can
+# force a dry spell and a storm to make sure that actually happens.
+set.seed(20260924, kind = "Mersenne-Twister", normal.kind = "Inversion",
+         sample.kind = "Rejection")
+FWI_CHAINS <- list(
+  # Sweden, both ends of the consumer's 55-69 N range, through a season.
+  list(id = "se-south", lat = 55.7, start = "2025-04-15", days = 120,
+       init = c(85, 6, 15), tmean = 13, tamp = 7, wet = 0.30),
+  list(id = "se-north", lat = 67.9, start = "2025-05-20", days = 110,
+       init = c(85, 6, 15), tmean = 9, tamp = 6, wet = 0.35),
+  list(id = "se-mid-wet-start", lat = 62.4, start = "2025-06-01", days = 60,
+       init = c(60, 3, 20), tmean = 12, tamp = 5, wet = 0.30),
+  # A drought: forty rainless days then a storm, at the Canadian reference
+  # latitude.
+  list(id = "drought-49n", lat = 49, start = "2025-06-01", days = 100,
+       init = c(85, 6, 15), tmean = 22, tamp = 6, wet = 0.20,
+       dry = 10:50, storm = c(51, 60)),
+  # Autumn into winter: temperatures fall through both floors (-1.1, -2.8).
+  list(id = "autumn-freeze-60n", lat = 60, start = "2025-10-01", days = 75,
+       init = c(80, 20, 250), tmean = -6, tamp = 10, wet = 0.35),
+  # One station in each remaining band, DMC's and DC's.
+  list(id = "15n", lat = 15, start = "2025-03-01", days = 40,
+       init = c(85, 6, 15), tmean = 28, tamp = 3, wet = 0.15),
+  list(id = "22n", lat = 22, start = "2025-05-01", days = 40,
+       init = c(85, 6, 15), tmean = 27, tamp = 3, wet = 0.20),
+  list(id = "equator", lat = 3, start = "2025-01-10", days = 40,
+       init = c(85, 6, 15), tmean = 27, tamp = 1, wet = 0.40),
+  list(id = "25s", lat = -25, start = "2025-11-15", days = 70,
+       init = c(85, 6, 15), tmean = 24, tamp = 4, wet = 0.20),
+  list(id = "41s", lat = -41, start = "2026-01-01", days = 60,
+       init = c(85, 6, 15), tmean = 16, tamp = 5, wet = 0.30)
+)
+for (ch in FWI_CHAINS) {
+  dates <- seq(as.Date(ch$start), by = "day", length.out = ch$days)
+  doy <- as.integer(format(dates, "%j"))
+  # Seasonal swing, flipped for the southern hemisphere.
+  season <- sin(2 * pi * (doy - 110) / 365) * sign(ch$lat + 1e-9)
+  temp <- round(ch$tmean + ch$tamp * season + rnorm(ch$days, 0, 3), 1)
+  rh <- round(pmin(100, pmax(5, 60 - 1.5 * (temp - ch$tmean) + rnorm(ch$days, 0, 14))), 1)
+  ws <- round(pmax(0, rnorm(ch$days, 12, 8)), 1)
+  wet <- logical(ch$days)
+  for (d in seq_len(ch$days)) {
+    p <- if (d > 1 && wet[d - 1]) 0.6 else ch$wet * 0.6
+    wet[d] <- runif(1) < p
+  }
+  prec <- ifelse(wet, round(rexp(ch$days, 1 / 6), 1), 0)
+  if (!is.null(ch$dry)) prec[ch$dry] <- 0
+  if (!is.null(ch$storm)) prec[ch$storm] <- c(62, 35)
+  input <- data.frame(long = -100, lat = ch$lat,
+                      yr = as.integer(format(dates, "%Y")),
+                      mon = as.integer(format(dates, "%m")),
+                      day = as.integer(format(dates, "%d")),
+                      temp = temp, rh = rh, ws = ws, prec = prec)
+  init <- data.frame(ffmc = ch$init[1], dmc = ch$init[2], dc = ch$init[3], lat = ch$lat)
+  o <- fwi(input, init = init, batch = TRUE, out = "fwi")
+  if (nrow(o) != ch$days) stop("chain ", ch$id, ": fwi() returned ", nrow(o), " rows")
+  g <- data.frame(kind = "chain", chain = ch$id, day = seq_len(ch$days),
+                  lat = ch$lat, mon = input$mon, temp = temp, rh = rh, ws = ws, prec = prec,
+                  ffmc = o$FFMC, dmc = o$DMC, dc = o$DC, isi = o$ISI,
+                  bui = o$BUI, fwi = o$FWI, dsr = o$DSR, stringsAsFactors = FALSE)
+  # Yesterday is recorded on day 1 only: it is the chain's start, and every
+  # later day's yesterday is the Go side's own previous output.
+  g$ffmc_yda <- c(ch$init[1], rep(NA, ch$days - 1))
+  g$dmc_yda <- c(ch$init[2], rep(NA, ch$days - 1))
+  g$dc_yda <- c(ch$init[3], rep(NA, ch$days - 1))
+  g$lat_adjust <- TRUE
+  fadd(g)
+}
+
+# --- test_fwi ---
+# cffdrs' own sample dataset, through fwi() with its own default start-up codes
+# (85, 6, 15). Independent of every choice above: real weather, chosen by
+# upstream, not by this script.
+data("test_fwi", package = "cffdrs", envir = environment())
+o <- fwi(test_fwi, out = "fwi")
+if (nrow(o) != nrow(test_fwi)) stop("fwi(test_fwi) returned ", nrow(o), " rows")
+n_tf <- nrow(test_fwi)
+fadd(data.frame(kind = "test_fwi", chain = "test_fwi", day = seq_len(n_tf),
+                lat = test_fwi$lat, mon = test_fwi$mon, temp = test_fwi$temp,
+                rh = test_fwi$rh, ws = test_fwi$ws, prec = test_fwi$prec,
+                ffmc_yda = c(85, rep(NA, n_tf - 1)),
+                dmc_yda = c(6, rep(NA, n_tf - 1)),
+                dc_yda = c(15, rep(NA, n_tf - 1)),
+                lat_adjust = TRUE,
+                ffmc = o$FFMC, dmc = o$DMC, dc = o$DC, isi = o$ISI,
+                bui = o$BUI, fwi = o$FWI, dsr = o$DSR, stringsAsFactors = FALSE))
+
+FW <- do.call(rbind, fwi_rows)
+# Every row must have produced the output its kind is about. A non-finite one is
+# not skipped -- it is emitted as null and the Go side fails on it -- but it is
+# worth stopping here first, where the inputs are still in hand.
+for (col in FWI_COLS_OUT) {
+  v <- FW[[col]]
+  bad <- !is.na(v) & !is.finite(v)
+  if (any(bad)) stop(sum(bad), " non-finite ", col, " values in the FWI block")
+}
+
+fwi_value <- function(v) {
+  if (is.character(v)) q(v)
+  else if (is.logical(v)) tolower(as.character(v))
+  else num(v)
+}
+fwi_json <- function(i) {
+  parts <- character(0)
+  for (col in FWI_COLS) {
+    v <- FW[[col]][i]
+    # A column a row's kind does not use is NA and is left out; NaN is not NA
+    # here, and is emitted (as null) rather than hidden.
+    if (is.na(v) && !is.nan(v)) next
+    parts <- c(parts, paste0('"', col, '": ', fwi_value(v)))
+  }
+  paste0('  {', paste(parts, collapse = ", "), '}')
+}
+fwi_body <- paste(vapply(seq_len(nrow(FW)), fwi_json, character(1)), collapse = ",\n")
+
 json <- paste0(
   '{\n',
   ' "note": "generated by testdata/gen_cffdrs_reference.R; do not edit by hand",\n',
   ' "oracle": "cffdrs R package (Canadian Forest Service), the authoritative FBP implementation",\n',
   ' "cffdrs_version": ', q(as.character(packageVersion("cffdrs"))), ',\n',
   ' "r_version": ', q(R.version.string), ',\n',
-  ' "cases": [\n', body, '\n ]\n}\n'
+  ' "cases": [\n', body, '\n ],\n',
+  ' "fwi_cases": [\n', fwi_body, '\n ]\n}\n'
 )
 
 dir.create(dirname(OUT), recursive = TRUE, showWarnings = FALSE)
@@ -507,3 +880,5 @@ cat(sprintf("  rows usable for the crown threshold (explicit CBH/CFL): %d, of wh
             sum(inp$CBH > 0 & inp$CFL > 0 & out$CFB > 0)))
 cat(sprintf("  fire descriptions: S %d, I %d, C %d\n",
             sum(out$FD == "S"), sum(out$FD == "I"), sum(out$FD == "C")))
+cat(sprintf("wrote %d FWI System cases (fwi_cases):\n", nrow(FW)))
+for (k in unique(FW$kind)) cat(sprintf("  %-9s %d\n", k, sum(FW$kind == k)))
