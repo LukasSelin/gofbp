@@ -40,7 +40,7 @@ func TestChangedFileJoinsToItsLedgerRow(t *testing.T) {
 	rep := classified(t,
 		changedFile{"R/rate_of_spread.r", "modified"},          // ✅
 		changedFile{"R/rate_of_spread_at_time.r", "modified"},  // 🔴
-		changedFile{"R/fwi.r", "modified"},                     // ⚪
+		changedFile{"R/hffmc.r", "modified"},                   // ⚪
 		changedFile{"R/direction.r", "modified"},               // 🟢
 		changedFile{"R/rate_of_spread_at_theta.r", "modified"}, // 🟡
 	)
@@ -48,7 +48,7 @@ func TestChangedFileJoinsToItsLedgerRow(t *testing.T) {
 	for _, tc := range []struct{ file, want string }{
 		{"rate_of_spread.r", ledger.Ported},
 		{"rate_of_spread_at_time.r", ledger.Missing},
-		{"fwi.r", ledger.OutOfScope},
+		{"hffmc.r", ledger.OutOfScope},
 		{"direction.r", ledger.Invariant},
 		{"rate_of_spread_at_theta.r", ledger.Partial},
 	} {
@@ -67,7 +67,7 @@ func TestChangedFileJoinsToItsLedgerRow(t *testing.T) {
 // is how a scheduled run acts on that without reading prose.
 func TestVerdictRanksAnAssertedRowAboveEverythingElse(t *testing.T) {
 	asserted := classified(t,
-		changedFile{"R/fwi.r", "modified"},
+		changedFile{"R/hffmc.r", "modified"},
 		changedFile{"R/rate_of_spread_at_time.r", "modified"},
 		changedFile{"R/buildup_effect.r", "modified"}, // ✅
 	)
@@ -79,7 +79,7 @@ func TestVerdictRanksAnAssertedRowAboveEverythingElse(t *testing.T) {
 	}
 
 	owed := classified(t,
-		changedFile{"R/fwi.r", "modified"},
+		changedFile{"R/hffmc.r", "modified"},
 		changedFile{"R/rate_of_spread_at_time.r", "modified"},
 	)
 	if owed.Exit != exitInScope {
@@ -87,7 +87,7 @@ func TestVerdictRanksAnAssertedRowAboveEverythingElse(t *testing.T) {
 	}
 
 	quiet := classified(t,
-		changedFile{"R/fwi.r", "modified"},
+		changedFile{"R/hffmc.r", "modified"},
 		changedFile{"man/fbp.Rd", "modified"},
 		changedFile{"NEWS.md", "modified"},
 	)
@@ -96,6 +96,37 @@ func TestVerdictRanksAnAssertedRowAboveEverythingElse(t *testing.T) {
 	}
 	if len(quiet.Outside) != 2 {
 		t.Errorf("outside R/ = %v, want man/ and NEWS.md", quiet.Outside)
+	}
+}
+
+// One upstream file, two rows: initial_spread_index.r is FBP's ISI (package fbp,
+// fbpMod = TRUE) and the FWI System's (package fwi, fbpMod = FALSE). A change to
+// it may move either number, so the join must report both rows, each pointing at
+// its own Go file, rather than letting one row's status stand for the pair.
+func TestAFileWithTwoRowsReportsBoth(t *testing.T) {
+	rep := classified(t, changedFile{"R/initial_spread_index.r", "modified"})
+	if len(rep.InR) != 2 {
+		t.Fatalf("got %d changes for initial_spread_index.r, want one per row (2): %+v", len(rep.InR), rep.InR)
+	}
+	gofiles := map[string]string{}
+	for _, c := range rep.InR {
+		if !c.Known || c.Row != ledger.Ported {
+			t.Errorf("%s (%s): row %q known=%v, want ✅", c.File, c.Variant, c.Row, c.Known)
+		}
+		gofiles[c.Variant] = c.GoFile
+	}
+	if gofiles["fbpMod = TRUE"] != "fbp.go" || gofiles["fbpMod = FALSE"] != "fwi/fwi.go" {
+		t.Errorf("the two rows point at %v; want fbp.go for fbpMod = TRUE and fwi/fwi.go for FALSE", gofiles)
+	}
+	if rep.Exit != exitAsserted {
+		t.Errorf("exit = %d, want %d", rep.Exit, exitAsserted)
+	}
+	var sb strings.Builder
+	printReport(&sb, rep)
+	for _, want := range []string{"initial_spread_index.r (fbpMod = TRUE)", "initial_spread_index.r (fbpMod = FALSE)"} {
+		if !strings.Contains(sb.String(), want) {
+			t.Errorf("the report does not name %q:\n%s", want, sb.String())
+		}
 	}
 }
 
@@ -237,7 +268,7 @@ func TestReportFramesUpstreamAsData(t *testing.T) {
 }
 
 func TestTruncatedFileListSaysSo(t *testing.T) {
-	rep := classified(t, changedFile{"R/fwi.r", "modified"})
+	rep := classified(t, changedFile{"R/hffmc.r", "modified"})
 	rep.Truncated = true
 	var sb strings.Builder
 	printReport(&sb, rep)

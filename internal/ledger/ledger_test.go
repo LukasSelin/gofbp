@@ -29,7 +29,7 @@ func TestLoadTheRealLedger(t *testing.T) {
 		t.Errorf("dependency order: %v", l.DependencyOrder)
 	}
 
-	byFile := l.ByFile()
+	byKey := l.ByKey()
 	// A row that owns several upstream files must be reachable by each of them,
 	// and the index must carry the row's real status rather than the first one it
 	// saw. Two rows exercise that: FMC, which owns two files and is ported, and
@@ -42,7 +42,7 @@ func TestLoadTheRealLedger(t *testing.T) {
 		{[]string{"rate_of_spread_at_time.r", "distance_at_time.r", "length_to_breadth_at_time.r"}, Missing},
 	} {
 		for _, f := range tc.files {
-			r, ok := byFile[f]
+			r, ok := byKey[f]
 			if !ok {
 				t.Fatalf("%s is not indexed", f)
 			}
@@ -50,6 +50,27 @@ func TestLoadTheRealLedger(t *testing.T) {
 				t.Errorf("%s: status %q, want %q", f, r.Status, tc.status)
 			}
 		}
+	}
+
+	// And one upstream file can be two rows. initial_spread_index.r is both
+	// FBP's ISI and the FWI System's, one per value of fbpMod: ByFile reaches
+	// both, ByKey tells them apart, and neither swallows the other.
+	isi := l.ByFile()["initial_spread_index.r"]
+	if len(isi) != 2 {
+		t.Fatalf("initial_spread_index.r has %d rows, want 2 (one per fbpMod)", len(isi))
+	}
+	for _, v := range []string{"fbpMod = TRUE", "fbpMod = FALSE"} {
+		r, ok := byKey[Key("initial_spread_index.r", v)]
+		if !ok {
+			t.Errorf("no row keyed %q", Key("initial_spread_index.r", v))
+			continue
+		}
+		if r.Variant != v || r.Status != Ported {
+			t.Errorf("%s: variant %q status %q", r, r.Variant, r.Status)
+		}
+	}
+	if _, bare := byKey["initial_spread_index.r"]; bare {
+		t.Error("a file split across variant rows must not also be reachable by its bare name")
 	}
 
 	if sha, err := l.UpstreamCommit(); err != nil || sha == "" {

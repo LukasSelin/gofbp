@@ -56,11 +56,32 @@ var inputCols = []string{
 	"lat", "long", "elv", "dj", "d0",
 }
 
+// fwiInputCols identify a case in the FWI System's section, "fwi_cases" — a
+// second top-level array that package fwi's TestCFFDRS* read, beside the FBP
+// "cases" above. The generator names inputs apart from outputs on purpose (the
+// ISI grid's FFMC is ffmc_in, because ffmc is what the FFMC rows output), so a
+// column is an input here if and only if it is in this list. kind, chain and
+// day are what make a multi-day chain's rows distinct from each other: the same
+// weather on two days of one chain is two cases, not a duplicate.
+//
+// A row carries only the columns its kind uses; the rest are absent, which
+// keys as null on both sides and so compares equal. That is what lets one list
+// serve every kind.
+var fwiInputCols = []string{
+	"kind", "chain", "day", "lat_adjust", "mon", "lat",
+	"temp", "rh", "ws", "prec",
+	"ffmc_yda", "dmc_yda", "dc_yda",
+	"ffmc_in", "dmc_in", "dc_in", "isi_in", "bui_in",
+}
+
 type fixture struct {
 	Oracle        string           `json:"oracle"`
 	CFFDRSVersion string           `json:"cffdrs_version"`
 	RVersion      string           `json:"r_version"`
 	Cases         []map[string]any `json:"cases"`
+	// FWICases is the FWI System's section. Absent from every fixture older than
+	// the 2026-09-24 FWI block, which is a new section rather than a lost one.
+	FWICases []map[string]any `json:"fwi_cases"`
 
 	path string
 }
@@ -81,6 +102,11 @@ type colStat struct {
 }
 
 type report struct {
+	// Section is which top-level array this report compares: "cases" (FBP) or
+	// "fwi_cases" (the FWI System). The FBP report is the top level and carries
+	// the FWI one in FWI, so a caller reading the old JSON shape still finds FBP
+	// where it always was.
+	Section      string    `json:"section"`
 	Old          string    `json:"old"`
 	New          string    `json:"new"`
 	OldVersions  string    `json:"old_versions"`
@@ -97,6 +123,17 @@ type report struct {
 	KeyCols      []string  `json:"key_cols"`
 	Columns      []colStat `json:"columns"`
 	Moved        []string  `json:"moved"`
+
+	// NewSection is true when only the new fixture has this section at all:
+	// there is nothing to compare, and nothing can have moved.
+	NewSection bool    `json:"new_section,omitempty"`
+	FWI        *report `json:"fwi,omitempty"`
+}
+
+// anyMoved reports whether anything moved in this section or the one it carries.
+// It is what the exit status is taken from.
+func (r *report) anyMoved() bool {
+	return len(r.Moved) > 0 || (r.FWI != nil && r.FWI.anyMoved())
 }
 
 func main() {
@@ -133,7 +170,7 @@ func main() {
 	} else {
 		printReport(os.Stdout, rep)
 	}
-	if len(rep.Moved) > 0 {
+	if rep.anyMoved() {
 		os.Exit(1)
 	}
 }
@@ -163,11 +200,11 @@ func (f *fixture) versions() string {
 	return fmt.Sprintf("cffdrs %s, %s", f.CFFDRSVersion, f.RVersion)
 }
 
-// columns returns every key seen across the fixture's cases, not just the first
+// columns returns every key seen across a section's cases, not just the first
 // one. A generator that emitted a column conditionally would otherwise vanish.
-func (f *fixture) columns() map[string]bool {
+func columns(cases []map[string]any) map[string]bool {
 	cols := map[string]bool{}
-	for _, c := range f.Cases {
+	for _, c := range cases {
 		for k := range c {
 			cols[k] = true
 		}
@@ -184,9 +221,9 @@ func (f *fixture) columns() map[string]bool {
 // kept cannot change a verdict. If they DISAGREE, the key no longer identifies a
 // case: some input the sweep varies is missing from inputCols, and every
 // comparison below is untrustworthy.
-func (f *fixture) index(keyCols []string) (idx map[string]map[string]any, identical, conflicting int) {
-	idx = make(map[string]map[string]any, len(f.Cases))
-	for _, c := range f.Cases {
+func index(cases []map[string]any, keyCols []string) (idx map[string]map[string]any, identical, conflicting int) {
+	idx = make(map[string]map[string]any, len(cases))
+	for _, c := range cases {
 		k := caseKey(c, keyCols)
 		kept, seen := idx[k]
 		if !seen {
@@ -247,21 +284,44 @@ func format(v any) string {
 	}
 }
 
+// compare diffs two fixtures: the FBP section at the top level, and the FWI
+// System's section inside it whenever either fixture has one.
 func compare(oldFx, newFx *fixture, tol float64, maxExamples int) *report {
-	oldCols, newCols := oldFx.columns(), newFx.columns()
+	rep := compareSection("cases", oldFx.Cases, newFx.Cases, inputCols, tol, maxExamples)
+	rep.Old, rep.New = oldFx.path, newFx.path
+	rep.OldVersions, rep.NewVersions = oldFx.versions(), newFx.versions()
+
+	switch {
+	case len(oldFx.FWICases) == 0 && len(newFx.FWICases) == 0:
+		// A pre-FWI pair: nothing to say, and saying nothing keeps the report
+		// for such a pair exactly what it always was.
+	case len(oldFx.FWICases) == 0:
+		rep.FWI = &report{Section: "fwi_cases", NewSection: true, NewCases: len(newFx.FWICases),
+			OnlyInNew: len(newFx.FWICases)}
+	default:
+		// Including the case where only the OLD fixture has the section: every
+		// column comes back "removed", which is a move — the FWI tests are about
+		// to start failing, and a diff that shrugged would be wrong.
+		rep.FWI = compareSection("fwi_cases", oldFx.FWICases, newFx.FWICases, fwiInputCols, tol, maxExamples)
+	}
+	return rep
+}
+
+func compareSection(section string, oldCases, newCases []map[string]any, inputs []string, tol float64, maxExamples int) *report {
+	oldCols, newCols := columns(oldCases), columns(newCases)
 
 	// Key on the input columns present in BOTH fixtures. An input column that
 	// exists on only one side cannot participate, and if it varies it announces
 	// itself as ambiguous keys below.
 	var keyCols []string
-	for _, c := range inputCols {
+	for _, c := range inputs {
 		if oldCols[c] && newCols[c] {
 			keyCols = append(keyCols, c)
 		}
 	}
 
-	oldIdx, oldDupes, oldConflicts := oldFx.index(keyCols)
-	newIdx, newDupes, newConflicts := newFx.index(keyCols)
+	oldIdx, oldDupes, oldConflicts := index(oldCases, keyCols)
+	newIdx, newDupes, newConflicts := index(newCases, keyCols)
 
 	shared := make([]string, 0, len(oldIdx))
 	onlyOld := 0
@@ -281,9 +341,8 @@ func compare(oldFx, newFx *fixture, tol float64, maxExamples int) *report {
 	}
 
 	rep := &report{
-		Old: oldFx.path, New: newFx.path,
-		OldVersions: oldFx.versions(), NewVersions: newFx.versions(),
-		OldCases: len(oldFx.Cases), NewCases: len(newFx.Cases),
+		Section:  section,
+		OldCases: len(oldCases), NewCases: len(newCases),
 		SharedCases: len(shared), OnlyInOld: onlyOld, OnlyInNew: onlyNew,
 		AmbiguousOld: oldConflicts, AmbiguousNew: newConflicts,
 		DuplicateOld: oldDupes, DuplicateNew: newDupes,
@@ -393,7 +452,7 @@ func compareCol(col string, shared []string, oldIdx, newIdx map[string]map[strin
 }
 
 func printReport(w io.Writer, rep *report) {
-	p := func(f string, a ...any) { fmt.Fprintf(w, f, a...) }
+	p := func(f string, a ...any) { _, _ = fmt.Fprintf(w, f, a...) }
 
 	p("old  %s\n     %s, %d cases\n", rep.Old, rep.OldVersions, rep.OldCases)
 	p("new  %s\n     %s, %d cases\n", rep.New, rep.NewVersions, rep.NewCases)
@@ -401,6 +460,38 @@ func printReport(w io.Writer, rep *report) {
 		p("\n!! the oracle versions differ. Movement below is explained by that, and\n" +
 			"!! the explanation belongs in the PR — see testdata/README.md.\n")
 	}
+	printSection(w, rep)
+
+	if f := rep.FWI; f != nil {
+		p("\n=== fwi_cases (the FWI System) ===\n")
+		if f.NewSection {
+			p("\nnew section: %d cases, and no fwi_cases in the old fixture to compare them\n"+
+				"against. Nothing in it can have moved.\n", f.NewCases)
+		} else {
+			p("old %d cases, new %d cases\n", f.OldCases, f.NewCases)
+			printSection(w, f)
+		}
+	}
+
+	p("\n")
+	if !rep.anyMoved() {
+		p("No column shared by both fixtures moved.\n")
+		return
+	}
+	moved := append([]string(nil), rep.Moved...)
+	if rep.FWI != nil {
+		for _, c := range rep.FWI.Moved {
+			moved = append(moved, "fwi_cases."+c)
+		}
+	}
+	p("MOVED: %s\n", strings.Join(moved, ", "))
+	p("A changed reference number is the oracle telling you something. Do not commit past it.\n")
+}
+
+// printSection prints one section's key, case accounting and column table.
+func printSection(w io.Writer, rep *report) {
+	p := func(f string, a ...any) { _, _ = fmt.Fprintf(w, f, a...) }
+
 	p("\nkeyed on %s\n", strings.Join(rep.KeyCols, ", "))
 	p("shared %d, only in old %d, only in new %d\n", rep.SharedCases, rep.OnlyInOld, rep.OnlyInNew)
 	if rep.DuplicateOld > 0 || rep.DuplicateNew > 0 {
@@ -435,12 +526,4 @@ func printReport(w io.Writer, rep *report) {
 			p("%-10s   %s\n", "", e)
 		}
 	}
-
-	p("\n")
-	if len(rep.Moved) == 0 {
-		p("No column shared by both fixtures moved.\n")
-		return
-	}
-	p("MOVED: %s\n", strings.Join(rep.Moved, ", "))
-	p("A changed reference number is the oracle telling you something. Do not commit past it.\n")
 }

@@ -144,7 +144,7 @@ say so in the test's comment rather than letting it read as a direct assertion.
   by their inputs, so added rows and a reordered sweep are not a diff; only a
   changed number is. This is the check the whole repository is organised around,
   and it is not something eyes do over 24,260 cases.
-- [ ] `go test . -run TestCFFDRS`, and report the per-fuel counts the test logs. A test asserting three hundred rows when you expected three thousand is passing for the wrong reason.
+- [ ] `go test ./... -run TestCFFDRS`, and report the per-fuel counts the test logs. A test asserting three hundred rows when you expected three thousand is passing for the wrong reason.
 - [ ] Write the `TestCFFDRS*` — and give it a **`ledger:` line in its doc comment** naming the upstream R file it asserts:
 
   ```go

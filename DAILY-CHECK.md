@@ -67,7 +67,7 @@ is right. Only the fixture can tell them apart.
 
 - [ ] Bump `CFFDRS_VERSION` in `testdata/Dockerfile`.
 - [ ] `./testdata/regen-cffdrs.sh`
-- [ ] `go test . -run TestCFFDRS`
+- [ ] `go test ./... -run TestCFFDRS` — both packages; `fwi` has oracle tests of its own
 - [ ] **Read the diff in the reference numbers.** Keep the old fixture and let `tools/fixture-diff` read it for you — 24,260 cases is not something eyes check:
 
   ```

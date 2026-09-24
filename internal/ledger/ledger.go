@@ -36,7 +36,15 @@ type Row struct {
 	// Files are the upstream R filenames named in the first cell. A row can own
 	// several — the FMC row owns both foliar_moisture_content.r and its _minimum
 	// companion — because they are one concept upstream splits across files.
-	Files   []string
+	Files []string
+	// Variant is the opposite case: one upstream file that is two concepts,
+	// each with its own row. initial_spread_index.r is the one there is —
+	// fbpMod = TRUE is FBP's ISI (package fbp), fbpMod = FALSE is the FWI
+	// System's (package fwi), and the two are ported, asserted and tracked
+	// separately. It is every backticked token in the first cell that is not an
+	// R filename, so the cell reads `initial_spread_index.r` (`fbpMod = FALSE`).
+	// Empty for every row that owns its files outright.
+	Variant string
 	Concept string
 	Status  string
 	Note    string
@@ -44,7 +52,33 @@ type Row struct {
 }
 
 func (r Row) String() string {
-	return fmt.Sprintf("%s (%s, line %d)", strings.Join(r.Files, ", "), r.Status, r.Line)
+	return fmt.Sprintf("%s (%s, line %d)", strings.Join(r.Keys(), ", "), r.Status, r.Line)
+}
+
+// Key is how a row is named from outside the ledger — in a test's `ledger:`
+// marker, and in the index ByKey returns: the bare filename for a row that
+// owns its file, "file (variant)" for one that shares it.
+func Key(file, variant string) string {
+	if variant == "" {
+		return file
+	}
+	return file + " (" + variant + ")"
+}
+
+// Keys returns Key for each of the row's files.
+func (r Row) Keys() []string {
+	keys := make([]string, len(r.Files))
+	for i, f := range r.Files {
+		keys[i] = Key(f, r.Variant)
+	}
+	return keys
+}
+
+// isRFile reports whether a first-cell token names an upstream R source file.
+// Upstream spells the extension both ways (gfmcRaster.R), and one row names a
+// glob (grass_fuel_moisture*.r).
+func isRFile(token string) bool {
+	return strings.HasSuffix(strings.ToLower(token), ".r")
 }
 
 // Pin is one row of the Pins table: what was read, and when it was last checked.
@@ -125,12 +159,28 @@ func Load(path string) (*Ledger, error) {
 	return l, nil
 }
 
-// ByFile indexes rows by every upstream filename they claim.
-func (l *Ledger) ByFile() map[string]Row {
+// ByKey indexes rows by Key: the bare filename for a row that owns its file,
+// "file (variant)" for one that shares it. This is the index a test's
+// `ledger:` marker is resolved against, so a marker has to say which of two
+// rows sharing a file it asserts.
+func (l *Ledger) ByKey() map[string]Row {
 	idx := make(map[string]Row, len(l.Rows))
 	for _, r := range l.Rows {
+		for _, k := range r.Keys() {
+			idx[k] = r
+		}
+	}
+	return idx
+}
+
+// ByFile indexes rows by upstream filename alone, which is how upstream names
+// them: a change to initial_spread_index.r reaches both of its rows. Most
+// files have exactly one.
+func (l *Ledger) ByFile() map[string][]Row {
+	idx := make(map[string][]Row, len(l.Rows))
+	for _, r := range l.Rows {
 		for _, f := range r.Files {
-			idx[f] = r
+			idx[f] = append(idx[f], r)
 		}
 	}
 	return idx
@@ -250,12 +300,20 @@ func (l *Ledger) parseRows() error {
 		if len(c) < 4 {
 			return fmt.Errorf("%s:%d: expected 4 columns in the R/ table, got %d", l.Path, lineNos[i], len(c))
 		}
-		files := Backticked(c[0])
+		var files, variant []string
+		for _, tok := range Backticked(c[0]) {
+			if isRFile(tok) {
+				files = append(files, tok)
+			} else {
+				variant = append(variant, tok)
+			}
+		}
 		if len(files) == 0 {
 			return fmt.Errorf("%s:%d: first column names no upstream file", l.Path, lineNos[i])
 		}
 		l.Rows = append(l.Rows, Row{
-			Files: files, Concept: c[1], Status: c[2], Note: c[3], Line: lineNos[i],
+			Files: files, Variant: strings.Join(variant, ", "),
+			Concept: c[1], Status: c[2], Note: c[3], Line: lineNos[i],
 		})
 	}
 	return nil

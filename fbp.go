@@ -311,6 +311,15 @@ const isfClampMin = 0.01
 // Wind is km/h because ST-X-3 is. Converting from m/s is the caller's job: this
 // package speaks the published system's units and nothing else.
 //
+// This is not fwi.ISI, the FWI System's daily index, and the two must not be
+// swapped. They share a name and eqs. 25-26, but fwi.ISI is fbpMod = FALSE —
+// exp(0.05039·wind) at every speed, which is what cffdrs' fwi() computes and
+// what a published daily ISI is. This one's wind function takes over at
+// HighWindKmh and saturates, so the two agree below 40 km/h and part above it:
+// at 60 km/h the FWI System's is about 1.85 times this one's. Feed FBP this one.
+// A published FWI-System ISI read in from elsewhere is the other one, and above
+// 40 km/h it is not the ISI the FBP equations were fitted to.
+//
 // It is here for two reasons the package did not previously have. First, the
 // equivalent-wind back-solve is defined as this function's inverse, so the two
 // must live together or they drift. Second, it lets a caller anchored on somebody

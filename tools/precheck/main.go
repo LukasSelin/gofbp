@@ -229,7 +229,7 @@ func digestAndMeta(path string) (string, fixtureMeta, error) {
 	if err != nil {
 		return "", fixtureMeta{}, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	h := sha256.New()
 	// The versions are in the first few hundred bytes — the generator emits them
@@ -343,8 +343,11 @@ func runTests(v *verdict) {
 	}
 
 	// Counted rather than hardcoded: the number of oracle tests grows with every
-	// ported row.
-	vo, _ := exec.Command("go", "test", ".", "-run", "TestCFFDRS", "-v").CombinedOutput()
+	// ported row. And counted across ./..., not just the root package: package fwi
+	// has TestCFFDRS* of its own that skip on exactly the same missing fixture, and
+	// a gate that only asked package fbp would call a session READY with all of
+	// fwi's skipping.
+	vo, _ := exec.Command("go", "test", "./...", "-run", "TestCFFDRS", "-v").CombinedOutput()
 	v.OracleTests, v.OracleSkipped = countOracle(string(vo))
 	if v.TestsPass && v.OracleTests > 0 && v.OracleSkipped > 0 {
 		v.block(fmt.Sprintf("%d of %d TestCFFDRS* tests skipped, so nothing concluded today about "+
@@ -403,7 +406,7 @@ func decide(v *verdict) {
 }
 
 func printVerdict(w io.Writer, v *verdict) {
-	p := func(f string, a ...any) { fmt.Fprintf(w, f, a...) }
+	p := func(f string, a ...any) { _, _ = fmt.Fprintf(w, f, a...) }
 
 	if v.Branch != "" {
 		p("branch   %s", v.Branch)
