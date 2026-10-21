@@ -147,6 +147,18 @@ rate alone is the wrong number for "how fast is this coming at *me*". See
 - `CrownFuelConsumption` (CFC) and `TotalFuelConsumption` (TFC) — the crown fuel
   a fire consumed and the surface-plus-crown total, with the M1/M2 percent-conifer
   and M3/M4 percent-dead-fir weightings the 2009 revision added
+- The published per-fuel crown defaults, as a lookup you opt into:
+  `DefaultCrownBaseHeight` and `DefaultCrownFuelLoad` return the table values;
+  `CrownBaseHeight` and `CrownFuelLoad` reproduce what `cffdrs::fbp()` does with
+  a supplied value — keep it if it is in range ((0, 50] m, (0, 2] kg/m²),
+  otherwise substitute the table, or for C6 with stand data
+  `C6StandCrownBaseHeight`. `Crown` calls none of them:
+
+  ```go
+  cbh, _ := fbp.DefaultCrownBaseHeight("C3") // 8 m
+  cfl, _ := fbp.DefaultCrownFuelLoad("C3")   // 1.15 kg/m²
+  cfb := fbp.CrownFractionBurned(fbp.Crown{FMC: fmc, SFC: sfc, CBH: cbh, CFL: cfl, SurfaceROS: rss})
+  ```
 - `FireIntensity` — Byram's fireline intensity, `300·FC·ROS` kW/m (eq. 69).
   The head fire intensity HFI is `FireIntensity(TotalFuelConsumption(…), ros)`,
   where `ros` is the surface rate for sixteen fuels and `C6CrownFire`'s blended
@@ -290,10 +302,12 @@ C6 is the seventeenth, and it has its own call — see
 signature has nowhere to put the FMC, SFC, CBH and CFL the blend needs.
 
 You supply the inputs. `Crown` takes foliar moisture content (FMC), surface fuel
-consumption (SFC), crown base height (CBH) and crown fuel load (CFL). CBH and CFL
-have no source in this package at all. FMC and SFC do — `FoliarMoistureContent`
-and `SurfaceFuelConsumption` compute them — but `Crown` still will not call either
-for you: one would have to invent a grass fuel load, the other a location and a
+consumption (SFC), crown base height (CBH) and crown fuel load (CFL). All four
+have a source in this package — `FoliarMoistureContent`, `SurfaceFuelConsumption`,
+and the published per-fuel CBH/CFL tables behind `DefaultCrownBaseHeight` and
+`DefaultCrownFuelLoad` — but `Crown` will not call any of them for you. For the
+two tables the reason is that a stand you have measured should not be quietly
+replaced by a published average; for the other two: one would have to invent a grass fuel load, the other a location and a
 date.
 
 ```go
@@ -354,15 +368,13 @@ rate from the full slope path, not `ROS`'s `RSI · BE · SF` product.
 unimplemented fuel comes back as a spread rate of zero, so screen codes with
 `CanonicalFuelCode` rather than reading the number.
 
-**The per-fuel crown tables.** The published per-fuel CBH and CFL defaults are
-absent. FMC and SFC are no longer on this list — `FoliarMoistureContent` and
-`SurfaceFuelConsumption` are both ported and oracle-asserted — but they are
-functions you call, not defaults `Crown` applies. The CBH/CFL gap has teeth:
-there is no crown base height or crown fuel load source inside this package, so a
-caller must bring its own — and CFL is what keeps the fuels with no crown (D1,
-S1–S3, O1A, O1B) reporting zero. `CrownFuelConsumption` inherits that exactly:
-it multiplies by the CFL you hand it and applies no per-fuel gate of its own, so
-passing the published 0 for those fuels is what gives you 0 back.
+**Defaults applied for you.** The per-fuel CBH and CFL tables, FMC and SFC are all
+ported and oracle-asserted, but every one of them is a function you call, never a
+default `Crown` applies. That is deliberate and it will stay that way; the one
+consequence worth knowing is that CFL is what keeps the fuels with no crown (D1,
+S1–S3, O1A, O1B) reporting zero, so a caller supplying their own CFL for those
+fuels is overriding the published 0. `CrownFuelConsumption` inherits that: it
+multiplies by the CFL you hand it and applies no per-fuel gate of its own.
 
 **C6 on sloped ground.** C6's crown rate of spread is implemented (above), but
 the slope back-solve for that fuel is not, and the two are separate gaps.
@@ -449,7 +461,7 @@ the pinned oracle on 2026-09-18; see `ROSAtAngle`'s doc comment and
 [MIGRATION.md](MIGRATION.md).
 
 **The `Go` workflow does not run the oracle.** The 15.8 MB fixture is generated
-rather than committed, so the twenty-nine fixture-backed tests skip on a fresh clone
+rather than committed, so the thirty-one fixture-backed tests skip on a fresh clone
 and a green `Go` badge means the identities, round-trips, invariants and NaN
 sweeps pass.
 

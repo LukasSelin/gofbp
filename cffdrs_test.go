@@ -51,15 +51,20 @@ type cffdrsCase struct {
 	ELV  float64 `json:"elv"`
 	DJ   float64 `json:"dj"`
 	D0   float64 `json:"d0"`
-	ISI  float64 `json:"isi"`
-	BE   float64 `json:"be"`
-	SF   float64 `json:"sf"`
-	WSV  float64 `json:"wsv"`
-	FMC  float64 `json:"fmc"`
-	SFC  float64 `json:"sfc"`
-	CSI  float64 `json:"csi"`
-	RSO  float64 `json:"rso"`
-	CFB  float64 `json:"cfb"`
+	// SD and SH are C6's stand density (stems/ha) and stand height (m), the
+	// inputs to crown_base_height's stand branch. 0 outside the CBH/CFL defaults
+	// block, which is fbp()'s own default. See TestCFFDRSCrownBaseHeight.
+	SD  float64 `json:"sd"`
+	SH  float64 `json:"sh"`
+	ISI float64 `json:"isi"`
+	BE  float64 `json:"be"`
+	SF  float64 `json:"sf"`
+	WSV float64 `json:"wsv"`
+	FMC float64 `json:"fmc"`
+	SFC float64 `json:"sfc"`
+	CSI float64 `json:"csi"`
+	RSO float64 `json:"rso"`
+	CFB float64 `json:"cfb"`
 	// CFC and TFC are eqs. 66a/66b/66c and 67. Both embed the CFL fbp() actually
 	// used, which on a row that sent the −1 sentinel is the per-fuel table value
 	// and not the −1 recorded in CFL above — so only usableForConsumption rows
@@ -78,8 +83,18 @@ type cffdrsCase struct {
 }
 
 // usableForCrown reports whether a case carries crown inputs this package can be
-// fed. See the CBH/CFL note above.
-func (c cffdrsCase) usableForCrown() bool { return c.CBH > 0 && c.CFL > 0 }
+// fed: a CBH and a CFL that fbp() honoured verbatim. See the CBH/CFL note above.
+//
+// It was CBH > 0 && CFL > 0 until the CBH/CFL defaults block (2026-10-21) sent
+// CBH 60 and CFL 3 on purpose, to reach crown_base_height's and
+// crown_fuel_load's other substitution triggers — and those rows, positive and
+// substituted, failed every crown test at once. The upper bounds are the same
+// mechanism as the -1 sentinel, and CrownBaseHeight / CrownFuelLoad are what
+// assert those rows instead.
+func (c cffdrsCase) usableForCrown() bool {
+	return c.CBH > 0 && c.CBH <= MaxSuppliedCrownBaseHeightM &&
+		c.usableForConsumption()
+}
 
 // usableForConsumption reports whether the CFL this case SENT is the one fbp()
 // multiplied into its cfc and tfc columns.
@@ -90,7 +105,9 @@ func (c cffdrsCase) usableForCrown() bool { return c.CBH > 0 && c.CFL > 0 }
 // recorded as 3 and computed at the table value, and reading it as an assertion
 // would blame this package for the gap. No block sends one, and this is what
 // keeps that true rather than assumed.
-func (c cffdrsCase) usableForConsumption() bool { return c.CFL > 0 && c.CFL <= 2 }
+func (c cffdrsCase) usableForConsumption() bool {
+	return c.CFL > 0 && c.CFL <= MaxSuppliedCrownFuelLoadKgM2
+}
 
 type cffdrsFixture struct {
 	Oracle        string       `json:"oracle"`
