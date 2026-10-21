@@ -192,14 +192,6 @@ func crownless(canonical string) bool {
 	return false
 }
 
-func normAzimuth(deg float64) float64 {
-	deg = math.Mod(deg, 360)
-	if deg < 0 {
-		deg += 360
-	}
-	return deg
-}
-
 // Predict is the FBP System for one stand: cffdrs' fire_behaviour_prediction()
 // with output = "All", less the outputs listed in the file comment, and with
 // every default it applies replaced by an error or an opt-in. See the file
@@ -288,7 +280,7 @@ func Predict(in Input) (Prediction, error) {
 			PC:                in.PC, PDF: in.PDF, CuringPct: in.CuringPct,
 		})
 	}
-	p.RAZ = normAzimuth(p.RAZ)
+	p.RAZ = normalizeDeg(p.RAZ)
 	p.ISI = ISI(in.FFMC, p.WSV)
 	p.BE = BuildupEffect(fuel, in.BUI)
 	p.SF = SlopeFactor(in.SlopePct)
