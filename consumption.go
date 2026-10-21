@@ -35,8 +35,8 @@ import "math"
 // this package refuses to make. cffdrs' fbp() does substitute 0.35; that is a
 // driver's decision, and this package does not have a driver.
 //
-// It does not compute fireline intensity. HFI is eq. 69 and is not ported yet —
-// see MIGRATION.md. Total and crown fuel consumption — eqs. 66a/66b/66c and 67 —
+// It does not compute fireline intensity: that is FireIntensity, eq. 69, in
+// intensity.go. Total and crown fuel consumption — eqs. 66a/66b/66c and 67 —
 // are at the bottom of this file.
 
 // The SFC coefficients, by equation number.

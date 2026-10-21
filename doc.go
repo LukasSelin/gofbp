@@ -136,9 +136,11 @@
 // must bring its own, and CFL in particular is what keeps the fuels with no crown
 // (D1, S1-S3, O1A, O1B) reporting zero.
 //
-// Also not implemented: the consumption and intensity outputs CFC, TFC and HFI,
-// which depend on CFB but are a separate quantity from spread; and C6's SLOPED
-// path. The second is narrower than it sounds and is worth stating, because C6's
+// The consumption and intensity outputs CFC, TFC and HFI are implemented
+// (consumption.go, intensity.go) as functions of CFB rather than as part of the
+// threshold, since they are a separate quantity from spread. What is not
+// implemented is C6's SLOPED path. It is narrower than it sounds and is worth
+// stating, because C6's
 // crown rate of spread landing does not close it. cffdrs back-solves the
 // slope-equivalent wind from rate_of_spread(), which for C6 returns the BLENDED
 // rate — so its equivalent wind for a sloped C6 stand depends on FMC and CBH,

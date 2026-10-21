@@ -413,7 +413,7 @@ if (!identical(as.integer(as.character(out$ID)), inp$ID)) {
 # foliar_moisture_content()'s, so those rows say nothing about eqs. 1-8 and the Go
 # side skips them by name.
 needed <- c("ISI", "BE", "SF", "WSV", "CFB", "FD", "ROS", "LB", "BROS", "FROS",
-            "FMC", "SFC", "CSI", "RSO", "CFC", "TFC")
+            "FMC", "SFC", "CSI", "RSO", "CFC", "TFC", "HFI")
 missing <- setdiff(needed, names(out))
 if (length(missing)) {
   stop("cffdrs ", packageVersion("cffdrs"), " did not return: ",
@@ -483,6 +483,11 @@ case_json <- function(i) {
     # Go side restricts to cfl in (0, 2] for anything that reads CFL.
     ', "cfc": ', num(out$CFC[i]),
     ', "tfc": ', num(out$TFC[i]),
+    # HFI is eq. 69, fire_intensity(TFC, ROS) = 300 * TFC * ROS, in kW/m. Like
+    # cfc and tfc it was always in fbp()'s contract and simply not emitted until
+    # intensity.go needed it. ROS here is fbp()'s reported head rate -- the
+    # crown-blended rate for C6, the surface rate RSS for every other fuel.
+    ', "hfi": ', num(out$HFI[i]),
     ', "fd": ', q(as.character(out$FD[i])),
     ', "ros": ', num(out$ROS[i]),
     ', "lb": ', num(out$LB[i]),
