@@ -35,9 +35,12 @@ package fbp
 // For C6 — conifer plantation — cffdrs replaces the table entry with a linear
 // function of stand density SD (stems/ha) and stand height SH (m) whenever both
 // are positive: CBH = -11.2 + 1.06·SH + 0.0017·SD, floored at 1e-7 m when it
-// goes negative. It is not one of ST-X-3's numbered equations, and upstream
-// cites no source for it, so it is ported as cffdrs computes it and identified
-// by its coefficients rather than an equation number. See C6StandCrownBaseHeight.
+// goes negative. It is GLC-X-10's eq. 91 (Wotton, Alexander & Taylor 2009),
+// which takes it from McAlpine & Hobbs (1994): height to live crown base in RED
+// PINE plantations from stand height and density. GLC-X-10 prints 0.00170 for
+// the density coefficient, which is cffdrs' 0.0017. The red-pine provenance is
+// worth knowing before applying it to a C6 stand of another species. See
+// C6StandCrownBaseHeight.
 
 // crownBaseHeightTable is cffdrs' CBHs vector (crown_base_height.r), in metres.
 var crownBaseHeightTable = map[string]float64{
@@ -92,9 +95,10 @@ func DefaultCrownFuelLoad(code string) (float64, bool) {
 	return crownFuelLoadTable[canonical], true
 }
 
-// C6StandCrownBaseHeight is cffdrs' crown base height for a C6 plantation from
-// its stand density (stems/ha) and stand height (m):
-// -11.2 + 1.06·SH + 0.0017·SD, floored at MinCrownBaseHeightM when negative.
+// C6StandCrownBaseHeight is GLC-X-10 eq. 91 (McAlpine & Hobbs 1994, fitted to
+// red pine plantations): the crown base height of a C6 plantation from its
+// stand density (stems/ha) and stand height (m), -11.2 + 1.06·SH + 0.0017·SD,
+// floored at MinCrownBaseHeightM when negative as cffdrs floors it.
 //
 // It applies no range screen of its own; CrownBaseHeight is what decides
 // whether a stand's SD and SH are used at all. A NaN input returns NaN.

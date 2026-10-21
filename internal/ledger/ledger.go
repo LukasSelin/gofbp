@@ -349,6 +349,27 @@ func (l *Ledger) parseLog() error {
 
 const dependencyHeading = "## Concepts still missing, in dependency order"
 
+// NothingOwed is the sentence that lets the dependency order be empty. Without
+// it an empty list is an error, because the far likelier cause of a list naming
+// no files is items that forgot to name theirs — which would silently unjoin the
+// list from the table. With it, the ledger is saying in words that nothing is
+// owed, and TestLedgerDependencyOrderIsComplete still checks that's true.
+const NothingOwed = "Nothing is owed."
+
+// sectionSays reports whether the section starting at line start contains
+// sentence, before the next "## " heading.
+func (l *Ledger) sectionSays(start int, sentence string) bool {
+	for i := start + 1; i < len(l.Lines); i++ {
+		if strings.HasPrefix(strings.TrimSpace(l.Lines[i]), "## ") {
+			return false
+		}
+		if strings.Contains(l.Lines[i], sentence) {
+			return true
+		}
+	}
+	return false
+}
+
 func (l *Ledger) parseDependencyOrder() error {
 	start := -1
 	for i, line := range l.Lines {
@@ -375,7 +396,7 @@ func (l *Ledger) parseDependencyOrder() error {
 			l.DependencyOrder = append(l.DependencyOrder, name)
 		}
 	}
-	if len(l.DependencyOrder) == 0 {
+	if len(l.DependencyOrder) == 0 && !l.sectionSays(start, NothingOwed) {
 		return fmt.Errorf("%s: the dependency order names no upstream files. Each item has to "+
 			"name the file its row is keyed on, or nothing can join this list to the table", l.Path)
 	}
