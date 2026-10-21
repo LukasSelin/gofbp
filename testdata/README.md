@@ -1,6 +1,6 @@
 # The cffdrs oracle fixture
 
-`cffdrs.json` is a sweep of 24,383 FBP cases and what the reference
+`cffdrs.json` is a sweep of 25,097 FBP cases and what the reference
 implementation produces for each, under `cases`, plus 14,682 FWI System cases
 under `fwi_cases`. Every `TestCFFDRS*` in both packages asserts against it —
 package `fbp` reads `cases`, package `fwi` reads `fwi_cases`. It is not in this
@@ -51,10 +51,12 @@ sha256  e438b1d3b61330b8501d17369aec17db5e6f6eb3a144a930124ff0a2fe865387
 
 **This digest is behind the generator, pending a container run.** Two ports on
 2026-10-21 changed the sweep: `fire_intensity.r` added an `hfi` output column,
-and the CBH/CFL defaults (`crowndefaults.go`) added `sd`/`sh` input columns and
-123 rows (24,260 → 24,383). `TestCFFDRSHeadFireIntensity`,
-`TestCFFDRSCrownBaseHeight` and `TestCFFDRSCrownFuelLoad` fail on this fixture
-with "Regenerate it" rather than skipping. That port could not reach the container (Docker's daemon was
+the CBH/CFL defaults (`crowndefaults.go`) added `sd`/`sh` input columns and
+123 rows, and the acceleration model (`acceleration.go`) added `hr`/`accel`
+input columns, seven time-dependent outputs and 714 rows (24,260 → 25,097).
+`TestCFFDRSHeadFireIntensity`, `TestCFFDRSCrownBaseHeight`,
+`TestCFFDRSCrownFuelLoad` and the three `TestCFFDRS…AtTime` tests fail on this
+fixture with "Regenerate it" rather than skipping. That port could not reach the container (Docker's daemon was
 down) and regenerated with local Windows R instead, at the pinned versions but
 with last-ulp libm differences in a few columns — so that digest is deliberately
 not recorded here. Regenerate with the container, check `fixture-diff` against
@@ -128,7 +130,7 @@ inputs and outputs, so they cost a little time and nothing else.
 
 ## What happens without it
 
-`go test ./...` passes. Thirty-one fixture-backed tests skip with a message pointing
+`go test ./...` passes. Thirty-four fixture-backed tests skip with a message pointing
 here; everything else — the identities, round-trips, rotational invariance and
 NaN sweeps — runs unconditionally, and is what CI checks on every push.
 

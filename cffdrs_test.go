@@ -54,17 +54,31 @@ type cffdrsCase struct {
 	// SD and SH are C6's stand density (stems/ha) and stand height (m), the
 	// inputs to crown_base_height's stand branch. 0 outside the CBH/CFL defaults
 	// block, which is fbp()'s own default. See TestCFFDRSCrownBaseHeight.
-	SD  float64 `json:"sd"`
-	SH  float64 `json:"sh"`
-	ISI float64 `json:"isi"`
-	BE  float64 `json:"be"`
-	SF  float64 `json:"sf"`
-	WSV float64 `json:"wsv"`
-	FMC float64 `json:"fmc"`
-	SFC float64 `json:"sfc"`
-	CSI float64 `json:"csi"`
-	RSO float64 `json:"rso"`
-	CFB float64 `json:"cfb"`
+	SD float64 `json:"sd"`
+	SH float64 `json:"sh"`
+	// HR is elapsed HOURS as sent (fbp() runs the model in minutes) and Accel is
+	// fbp()'s point-ignition switch. Only Accel = 1 rows exercise the acceleration
+	// model; elsewhere HR is 1 and the t-columns below carry equilibrium values.
+	HR    float64 `json:"hr"`
+	Accel float64 `json:"accel"`
+	// The acceleration model's outputs — see TestCFFDRSAcceleration. DF is the
+	// driver's (DH + DB) / (2·LBt), carried for the flank composition.
+	HROSt float64 `json:"hrost"`
+	BROSt float64 `json:"brost"`
+	FROSt float64 `json:"frost"`
+	LBt   float64 `json:"lbt"`
+	DH    float64 `json:"dh"`
+	DB    float64 `json:"db"`
+	DF    float64 `json:"df"`
+	ISI   float64 `json:"isi"`
+	BE    float64 `json:"be"`
+	SF    float64 `json:"sf"`
+	WSV   float64 `json:"wsv"`
+	FMC   float64 `json:"fmc"`
+	SFC   float64 `json:"sfc"`
+	CSI   float64 `json:"csi"`
+	RSO   float64 `json:"rso"`
+	CFB   float64 `json:"cfb"`
 	// CFC and TFC are eqs. 66a/66b/66c and 67. Both embed the CFL fbp() actually
 	// used, which on a row that sent the −1 sentinel is the per-fuel table value
 	// and not the −1 recorded in CFL above — so only usableForConsumption rows

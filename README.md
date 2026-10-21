@@ -159,6 +159,11 @@ rate alone is the wrong number for "how fast is this coming at *me*". See
   cfl, _ := fbp.DefaultCrownFuelLoad("C3")   // 1.15 kg/m²
   cfb := fbp.CrownFractionBurned(fbp.Crown{FMC: fmc, SFC: sfc, CBH: cbh, CFL: cfl, SurfaceROS: rss})
   ```
+- The acceleration model for a point ignition: `AccelerationAlpha` (eq. 72),
+  `ROSAtTime` (eq. 70), `DistanceAtTime` (eq. 71) and `LengthToBreadthAtTime`
+  (GLC-X-10 eq. 81). Time is **minutes** since ignition — `cffdrs::fbp()` takes
+  hours and multiplies by 60. Pass the head fire's CFB for every rate, back
+  included, to match `fbp()`
 - `FireIntensity` — Byram's fireline intensity, `300·FC·ROS` kW/m (eq. 69).
   The head fire intensity HFI is `FireIntensity(TotalFuelConsumption(…), ros)`,
   where `ros` is the surface rate for sixteen fuels and `C6CrownFire`'s blended
@@ -385,8 +390,8 @@ with FMC and CBH, and no surface-only inversion reproduces it.
 exactly; on a slope, feed `C6CrownFire` an ISI you trust rather than one
 back-solved here.
 
-Also absent: the acceleration model, the flank and back fire intensities, and
-everything else `cffdrs::fbp()` returns that is not spread geometry. HFI came off
+Also absent: the flank and back fire intensities, and everything else
+`cffdrs::fbp()` returns that is not spread geometry. HFI came off
 this list on 2026-10-21 (`FireIntensity`, above). FFI and BFI are the same eq. 69
 on the flank and back fuel consumptions, and those need CFB evaluated at the
 flank and back rates, which nothing here computes yet — so `FireIntensity` is
@@ -461,7 +466,7 @@ the pinned oracle on 2026-09-18; see `ROSAtAngle`'s doc comment and
 [MIGRATION.md](MIGRATION.md).
 
 **The `Go` workflow does not run the oracle.** The 15.8 MB fixture is generated
-rather than committed, so the thirty-one fixture-backed tests skip on a fresh clone
+rather than committed, so the thirty-four fixture-backed tests skip on a fresh clone
 and a green `Go` badge means the identities, round-trips, invariants and NaN
 sweeps pass.
 
