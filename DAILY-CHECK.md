@@ -68,7 +68,7 @@ is right. Only the fixture can tell them apart.
 - [ ] Bump `CFFDRS_VERSION` in `testdata/Dockerfile`.
 - [ ] `./testdata/regen-cffdrs.sh`
 - [ ] `go test ./... -run TestCFFDRS` — both packages; `fwi` has oracle tests of its own
-- [ ] **Read the diff in the reference numbers.** Keep the old fixture and let `tools/fixture-diff` read it for you — 24,260 cases is not something eyes check:
+- [ ] **Read the diff in the reference numbers.** Keep the old fixture and let `tools/fixture-diff` read it for you — 24,383 cases is not something eyes check:
 
   ```
   cp testdata/cffdrs.json /tmp/cffdrs.old.json
@@ -123,6 +123,9 @@ Stop and ask before doing any of these. Each one changes what the package
 
 - Adding a default for FMC, SFC, CBH, CFL or a fuel-type mapping. The absence of
   local judgement is the package's central claim; a default is local judgement.
+  The published CBH/CFL tables exist as a lookup the caller opts into
+  (`crowndefaults.go`, decided 2026-10-21); a default is something applied
+  without being asked for, and that is still the line.
 - Committing the fixture. It is GPL-2 output in an MIT repository, and that is
   the reason it is generated rather than stored.
 - Moving a ⚪ row into scope, or a 🔴 row out of it.

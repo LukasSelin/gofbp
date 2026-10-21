@@ -1,6 +1,6 @@
 ---
 description: Port one row from the migration ledger — oracle column first, then the Go, then the tests and the ledger
-argument-hint: "[ledger row, e.g. CBH/CFL | TFC | HFI | acceleration] (default: top unblocked)"
+argument-hint: "[ledger row, e.g. acceleration | fbp.r] (default: top unblocked)"
 allowed-tools: Bash(go run ./tools/...:*), Bash(git:*), Bash(go test:*), Bash(go build:*), Bash(go vet:*), Bash(./testdata/regen-cffdrs.sh:*), Bash(sha256sum:*), Bash(cp:*), Bash(gh pr create:*), Bash(gh pr view:*), Read, Edit, Write, Glob, Grep, WebFetch
 ---
 
@@ -109,9 +109,13 @@ what `fbp()` returns is a 🟢 you will have to take back.
 
 Case (c) has a trap worth naming: **CBH and CFL are recorded as sent**, `-1` on
 the surface sweeps, and `fbp()` returns neither. So the per-fuel default tables
-have no direct column. Recovering CBH by inverting eq. 56 from the returned CSI
-and FMC is possible and is a legitimate technique — but it is an *inference*, so
-say so in the test's comment rather than letting it read as a direct assertion.
+have no direct column — and yet they went ✅, not 🟢, on 2026-10-21, because a
+quantity with no column can still be asserted *forward* through the first output
+it enters: CSI is eq. 56 of the CBH `fbp()` used, CFC is eq. 66 of the CFL. See
+`crowndefaults_cffdrs_test.go`. Prefer that to inverting an output, which is an
+inference and has to be called one. The same trap has a second edge: a value
+sent *above* the honoured range (CBH > 50, CFL > 2) is substituted exactly like
+-1, so "positive" is not "honoured" — `usableForCrown` learned that the hard way.
 
 ## 2. Read both sources, not one
 
@@ -143,7 +147,7 @@ say so in the test's comment rather than letting it read as a direct assertion.
   0. **Anything else is the finding — stop and report it.** The tool keys cases
   by their inputs, so added rows and a reordered sweep are not a diff; only a
   changed number is. This is the check the whole repository is organised around,
-  and it is not something eyes do over 24,260 cases.
+  and it is not something eyes do over 24,383 cases.
 - [ ] `go test ./... -run TestCFFDRS`, and report the per-fuel counts the test logs. A test asserting three hundred rows when you expected three thousand is passing for the wrong reason.
 - [ ] Write the `TestCFFDRS*` — and give it a **`ledger:` line in its doc comment** naming the upstream R file it asserts:
 
@@ -172,7 +176,7 @@ exclusion needs a reason with a mechanism in it, not a symptom.
 
 ## Escalate rather than decide
 
-- **Per-fuel CBH/CFL is the sharp one.** The ledger has it in scope — the tables are published ST-X-3 values, not local judgement — but *how it is exposed* is a design decision, not a porting one. A lookup the caller opts into is a different package from a silent default inside `Crown`, and the second one quietly makes this package decide what the ground is made of. Ask before choosing.
+- **Per-fuel CBH/CFL was the sharp one, and it is decided.** On 2026-10-21 the maintainer chose an opt-in lookup (`crowndefaults.go`); `Crown` applies no default. Anything that would make `Crown`, `CrownFractionBurned` or another computation apply those tables silently reopens that decision — ask first.
 - Anything else on `DAILY-CHECK.md`'s escalation list: a default for FMC or SFC, committing the fixture, moving a row into or out of scope, putting the oracle workflow on push.
 - **A moved reference number you cannot explain.** Report it; do not commit past it.
 

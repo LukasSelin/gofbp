@@ -130,11 +130,13 @@
 // Crown.FMC stay fields the caller fills, because computing them needs a grass
 // fuel load and a location and date that only the caller has.
 //
-// Not implemented, and caller-supplied instead: the published per-fuel CBH and CFL
-// default tables. That is the one with teeth — without those tables a caller
-// has no source for crown base height or crown fuel load inside this package and
-// must bring its own, and CFL in particular is what keeps the fuels with no crown
-// (D1, S1-S3, O1A, O1B) reporting zero.
+// The published per-fuel CBH and CFL tables are a lookup the caller opts into —
+// DefaultCrownBaseHeight, DefaultCrownFuelLoad, and CrownBaseHeight /
+// CrownFuelLoad for fbp()'s substitution rules (crowndefaults.go) — and Crown
+// calls none of them, for the same reason it calls neither of the above: a
+// measured stand must not be quietly replaced by a published average. CFL is the
+// one with teeth: it is what keeps the fuels with no crown (D1, S1-S3, O1A,
+// O1B) reporting zero, so the caller who fills Crown.CFL owns that.
 //
 // The consumption and intensity outputs CFC, TFC and HFI are implemented
 // (consumption.go, intensity.go) as functions of CFB rather than as part of the

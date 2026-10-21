@@ -51,9 +51,13 @@ import (
 // against one — which is exactly the case the "present in BOTH fixtures" rule
 // below handles, and why that block gives every one of its sites a distinct
 // latitude.
+//
+// sd and sh joined it with the CBH/CFL defaults block (C6's stand density and
+// height). The same rule applies, and the block gives each of its stand rows a
+// latitude of its own for the same reason.
 var inputCols = []string{
 	"fuel", "ffmc", "bui", "ws", "wd", "gs", "pc", "pdf", "cc", "cbh", "cfl",
-	"lat", "long", "elv", "dj", "d0",
+	"lat", "long", "elv", "dj", "d0", "sd", "sh",
 }
 
 // fwiInputCols identify a case in the FWI System's section, "fwi_cases" — a

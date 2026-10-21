@@ -36,9 +36,9 @@ import "math"
 // RATE, not the fraction.
 //
 // It also does not produce its own inputs. FMC (from latitude, longitude,
-// elevation and date) is the caller's, as are CBH and CFL. The published system
-// has per-fuel default tables for the latter two; they are deliberately absent
-// here — see the package doc.
+// elevation and date) is the caller's, as are CBH and CFL. The published per-fuel
+// tables for the latter two are in crowndefaults.go as a lookup the caller opts
+// into; Crown never applies them — see the package doc.
 //
 // SFC is the one that changed: SurfaceFuelConsumption in consumption.go computes
 // it, and a caller should feed the result into Crown.SFC. Crown does not do that

@@ -97,11 +97,12 @@ GRASS <- c("O1a", "O1b")
 # those and it is silently replaced by the table, which is the same trap again.
 base_row <- function(fuel, ffmc, bui, ws, gs, pc = 50, pdf = 35, cc = 80,
                      cbh = -1, cfl = -1, lat = 60, dj = 200,
-                     long = 15, elv = 0, d0 = 0) {
+                     long = 15, elv = 0, d0 = 0, sd = 0, sh = 0) {
   data.frame(
     FuelType = fuel, LAT = lat, LONG = long, ELV = elv, Dj = dj, D0 = d0,
     FFMC = ffmc, BUI = bui, WS = ws, WD = 0, GS = gs, Aspect = 0,
     PC = pc, PDF = pdf, cc = cc, GFL = 0.35, CBH = cbh, CFL = cfl,
+    SD = sd, SH = sh,
     hr = 1, theta = 0, Accel = 0, montane = 0,
     stringsAsFactors = FALSE
   )
@@ -380,6 +381,51 @@ for (cfl in CFC_CFL_VALUES) {
   }
 }
 
+# CBH and CFL defaults: what fbp() substitutes, and when.
+#
+# Neither crown_base_height() nor crown_fuel_load() is an fbp() output, so this
+# block cannot emit them. What it can do is make the CSI and CFC columns depend
+# on every branch of both, so the Go side can assert them FORWARD: CSI is eq. 56
+# of whatever CBH fbp() settled on, and CFC is eq. 66 of whatever CFL it did.
+# The thousands of sentinel (-1) rows above already reach the two tables. What
+# nothing above reaches:
+#
+#   the substitution TRIGGERS other than -1. crown_base_height substitutes for
+#        CBH <= 0, > 50 or NA; crown_fuel_load for CFL <= 0, > 2 or NA. CBH 0 and
+#        60 and CFL 0 and 3 are substituted; CBH 50 and CFL 2 are the inclusive
+#        upper bounds and must be honoured verbatim. A mistranscribed < for <=
+#        shows up on exactly these rows. Every fuel, so the table is reached
+#        through each trigger and not only through -1.
+#   C6's STAND branch. For C6 with stand density SD > 0 and stand height SH > 0
+#        the substitute is -11.2 + 1.06*SH + 0.0017*SD rather than the table, and
+#        a negative result is floored at 1e-7. fbp() screens both first: SD
+#        outside [0, 1e5] and SH outside [0, 100] become -999, which fails the
+#        > 0 test and falls back to the table. The grid below reaches the
+#        equation, the floor (SH 5 with small SD), both screens (SD 150000,
+#        SH 150), both inclusive bounds (SD 1e5, SH 100), and a supplied CBH 10
+#        that must win over the equation.
+#
+# FFMC 95, WS 30 and BUI 60 on flat ground make most of these rows crown, which
+# is what puts CFL into CFC at all. sd and sh are new INPUT columns; every row
+# above sends 0 for both, which is fbp()'s own default when they are absent, so
+# no existing number can move. The stand rows differ only in sd, sh and cbh, and
+# tools/fixture-diff cannot key on sd/sh against a fixture that predates them --
+# so each gets its own latitude, as the FMC block's sites do.
+DEF_CBH_CFL <- list(c(0, 0), c(60, 3), c(50, 2))
+for (fuel in c(SIMPLE, MIXED_PC, MIXED_PDF, GRASS)) {
+  for (cc in DEF_CBH_CFL) {
+    add(base_row(fuel, 95, 60, 30, 0, cbh = cc[1], cfl = cc[2], lat = 45, dj = 175))
+  }
+}
+C6_SD_VALUES <- c(0, 500, 2000, 50000, 1e5, 150000)
+C6_SH_VALUES <- c(0, 5, 15, 30, 100, 150)
+k <- 0L
+for (cbh in c(-1, 10)) for (sd in C6_SD_VALUES) for (sh in C6_SH_VALUES) {
+  add(base_row("C6", 95, 60, 30, 0, cbh = cbh, lat = 30 + 0.5 * k, dj = 175,
+               sd = sd, sh = sh))
+  k <- k + 1L
+}
+
 inp <- do.call(rbind, rows)
 # Carry an explicit ID. Without one, fbp() auto-assigns 1..n and returns its rows
 # sorted by ID as a STRING -- for n > 9 that is 1, 10, 100, 1000, 2, ... and reading
@@ -465,6 +511,11 @@ case_json <- function(i) {
     ', "long": ', num(inp$LONG[i]),
     ', "elv": ', num(inp$ELV[i]),
     ', "d0": ', num(inp$D0[i]),
+    # SD and SH are C6's stand density (stems/ha) and stand height (m), the
+    # inputs to crown_base_height's stand branch. 0 everywhere but the CBH/CFL
+    # defaults block.
+    ', "sd": ', num(inp$SD[i]),
+    ', "sh": ', num(inp$SH[i]),
     ', "isi": ', num(out$ISI[i]),
     ', "be": ', num(out$BE[i]),
     ', "sf": ', num(out$SF[i]),
@@ -508,7 +559,7 @@ body <- paste(vapply(seq_len(nrow(inp)), case_json, character(1)), collapse = ",
 #     before this block existed, so tools/fixture-diff over the FBP section can
 #     say "no column moved" and mean it.
 #   - No row down here carries a "fuel" key. precheck counts FBP cases by that
-#     substring, and the documented 24,260 is an FBP number.
+#     substring, and the documented 24,383 is an FBP number.
 #   - The two systems share no input: FBP takes FFMC/BUI as given, and this is
 #     where they come from.
 #
