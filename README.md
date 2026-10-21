@@ -120,6 +120,33 @@ That spread — 45 m/min at the head against 0.71 at the back — is why the hea
 rate alone is the wrong number for "how fast is this coming at *me*". See
 `example_test.go`, which is this program and is run by the test suite.
 
+## The driver: `Predict`
+
+One call that composes everything above the way `cffdrs::fbp()` does, for one
+stand — and, unlike `fbp()`, defaults nothing. Every input `fbp()` would quietly
+replace is an error here, and the two lookups it would quietly apply are
+opt-ins you name:
+
+```go
+p, err := fbp.Predict(fbp.Input{
+	Fuel: "C2", FFMC: 92, BUI: 40,
+	WindKmh: 30, WindAzimuthDeg: 180, // towards: fbp()'s WD + 180
+	PC: 50, PDF: 35, CuringPct: 80,
+	Site:  &fbp.Site{Lat: 55, Long: -120, DayOfYear: 180}, // opt in: FMC from the site
+	Crown: fbp.CrownCFFDRS, CBH: -1, CFL: -1,              // opt in: the published tables
+	ElapsedMin: 60, PointIgnition: true,
+})
+// p.ROS, p.CFB, p.FD, p.HFI, p.RAZ, p.TFC, … p.DH, p.TI
+```
+
+Leave `Crown` unset and `Predict` returns `ErrCrownUnset`; leave out both `FMC`
+and `Site` for a fuel with a crown and it returns `ErrNoFMC`; give a grass fuel
+no `GrassFuelLoad` and it returns `ErrNoGrassLoad`. It refuses C6 on sloped
+ground (`ErrC6OnSlope`) rather than disagree with cffdrs for a reason you
+cannot see — see below — and it does not compute the rate at a bearing, which
+`ROSAtAngle` does from its head, flank and back rates. Asserted against
+`fbp()` on every row of the reference sweep.
+
 ## What is implemented
 
 - `CanonicalFuelCode` — folds a fuel code to the table's spelling and says
@@ -164,6 +191,7 @@ rate alone is the wrong number for "how fast is this coming at *me*". See
   (GLC-X-10 eq. 81). Time is **minutes** since ignition — `cffdrs::fbp()` takes
   hours and multiplies by 60. Pass the head fire's CFB for every rate, back
   included, to match `fbp()`
+- `Predict` — the whole prediction in one call; see [The driver](#the-driver-predict)
 - `FireIntensity` — Byram's fireline intensity, `300·FC·ROS` kW/m (eq. 69).
   The head fire intensity HFI is `FireIntensity(TotalFuelConsumption(…), ros)`,
   where `ros` is the surface rate for sixteen fuels and `C6CrownFire`'s blended
@@ -390,12 +418,11 @@ with FMC and CBH, and no surface-only inversion reproduces it.
 exactly; on a slope, feed `C6CrownFire` an ISI you trust rather than one
 back-solved here.
 
-Also absent: the flank and back fire intensities, and everything else
-`cffdrs::fbp()` returns that is not spread geometry. HFI came off
-this list on 2026-10-21 (`FireIntensity`, above). FFI and BFI are the same eq. 69
-on the flank and back fuel consumptions, and those need CFB evaluated at the
-flank and back rates, which nothing here computes yet — so `FireIntensity` is
-the right call for them, but the consumption you would hand it is not provided.
+Also absent: the rate at a bearing among `cffdrs::fbp()`'s outputs (TROS and
+everything built on it — see `ROSAtAngle`), and `fbp()`'s ISI override and
+BUIEFF switch. The flank and back intensities came off this list with
+`Predict`. HFI came off
+this list on 2026-10-21 (`FireIntensity`, above).
 
 The three paragraphs above are a summary. [MIGRATION.md](MIGRATION.md) is the
 full account: every file in `cffdrs`'s `R/` with a status, what is deliberately
@@ -466,7 +493,7 @@ the pinned oracle on 2026-09-18; see `ROSAtAngle`'s doc comment and
 [MIGRATION.md](MIGRATION.md).
 
 **The `Go` workflow does not run the oracle.** The 15.8 MB fixture is generated
-rather than committed, so the thirty-four fixture-backed tests skip on a fresh clone
+rather than committed, so the thirty-five fixture-backed tests skip on a fresh clone
 and a green `Go` badge means the identities, round-trips, invariants and NaN
 sweeps pass.
 

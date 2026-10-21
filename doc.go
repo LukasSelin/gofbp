@@ -138,6 +138,9 @@
 // one with teeth: it is what keeps the fuels with no crown (D1, S1-S3, O1A,
 // O1B) reporting zero, so the caller who fills Crown.CFL owns that.
 //
+// Predict (predict.go) composes all of it the way cffdrs' fbp() does, for one
+// stand, and applies none of the above lookups unless the Input names them.
+//
 // The consumption and intensity outputs CFC, TFC and HFI are implemented
 // (consumption.go, intensity.go) as functions of CFB rather than as part of the
 // threshold, since they are a separate quantity from spread. What is not
