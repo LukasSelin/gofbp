@@ -147,6 +147,10 @@ rate alone is the wrong number for "how fast is this coming at *me*". See
 - `CrownFuelConsumption` (CFC) and `TotalFuelConsumption` (TFC) — the crown fuel
   a fire consumed and the surface-plus-crown total, with the M1/M2 percent-conifer
   and M3/M4 percent-dead-fir weightings the 2009 revision added
+- `FireIntensity` — Byram's fireline intensity, `300·FC·ROS` kW/m (eq. 69).
+  The head fire intensity HFI is `FireIntensity(TotalFuelConsumption(…), ros)`,
+  where `ros` is the surface rate for sixteen fuels and `C6CrownFire`'s blended
+  rate for C6 — exactly how `cffdrs::fbp()` computes its `HFI` column
 
 ## The FWI System: package `fwi`
 
@@ -369,10 +373,12 @@ with FMC and CBH, and no surface-only inversion reproduces it.
 exactly; on a slope, feed `C6CrownFire` an ISI you trust rather than one
 back-solved here.
 
-Also absent: HFI, the acceleration model, and everything else `cffdrs::fbp()`
-returns that is not spread geometry. CFC and TFC came off this list on
-2026-09-20; HFI is `300·TFC·ROS` and is the one thing that was genuinely waiting
-on them.
+Also absent: the acceleration model, the flank and back fire intensities, and
+everything else `cffdrs::fbp()` returns that is not spread geometry. HFI came off
+this list on 2026-10-21 (`FireIntensity`, above). FFI and BFI are the same eq. 69
+on the flank and back fuel consumptions, and those need CFB evaluated at the
+flank and back rates, which nothing here computes yet — so `FireIntensity` is
+the right call for them, but the consumption you would hand it is not provided.
 
 The three paragraphs above are a summary. [MIGRATION.md](MIGRATION.md) is the
 full account: every file in `cffdrs`'s `R/` with a status, what is deliberately
@@ -443,7 +449,7 @@ the pinned oracle on 2026-09-18; see `ROSAtAngle`'s doc comment and
 [MIGRATION.md](MIGRATION.md).
 
 **The `Go` workflow does not run the oracle.** The 15.8 MB fixture is generated
-rather than committed, so the twenty-eight fixture-backed tests skip on a fresh clone
+rather than committed, so the twenty-nine fixture-backed tests skip on a fresh clone
 and a green `Go` badge means the identities, round-trips, invariants and NaN
 sweeps pass.
 

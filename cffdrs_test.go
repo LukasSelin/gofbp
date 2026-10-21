@@ -64,8 +64,12 @@ type cffdrsCase struct {
 	// used, which on a row that sent the −1 sentinel is the per-fuel table value
 	// and not the −1 recorded in CFL above — so only usableForConsumption rows
 	// can say what CFL produced them. See TestCFFDRSTotalFuelConsumption.
-	CFC  float64 `json:"cfc"`
-	TFC  float64 `json:"tfc"`
+	CFC float64 `json:"cfc"`
+	TFC float64 `json:"tfc"`
+	// HFI is eq. 69, 300 · TFC · ROS, with fbp()'s own TFC and its reported head
+	// ROS — so it inherits TFC's CFL caveat above, and C6's blended rate. See
+	// TestCFFDRSHeadFireIntensity.
+	HFI  float64 `json:"hfi"`
 	FD   string  `json:"fd"`
 	ROS  float64 `json:"ros"`
 	LB   float64 `json:"lb"`

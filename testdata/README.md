@@ -49,6 +49,16 @@ figures in the top-level README were measured against, is:
 sha256  e438b1d3b61330b8501d17369aec17db5e6f6eb3a144a930124ff0a2fe865387
 ```
 
+**This digest is one column short of the generator, pending a container run.**
+The `fire_intensity.r` port (2026-10-21) added an `hfi` output column, and
+`TestCFFDRSHeadFireIntensity` fails on this fixture with "Regenerate it" rather
+than skipping. That port could not reach the container (Docker's daemon was
+down) and regenerated with local Windows R instead, at the pinned versions but
+with last-ulp libm differences in a few columns — so that digest is deliberately
+not recorded here. Regenerate with the container, check `fixture-diff` against
+this digest reports *No column shared by both fixtures moved*, and replace the
+line above, moving `e438b1d3` into the table below.
+
 Earlier digests are kept so a stale local fixture identifies itself instead of
 failing obscurely. Newest first:
 
@@ -116,7 +126,7 @@ inputs and outputs, so they cost a little time and nothing else.
 
 ## What happens without it
 
-`go test ./...` passes. Twenty-eight fixture-backed tests skip with a message pointing
+`go test ./...` passes. Twenty-nine fixture-backed tests skip with a message pointing
 here; everything else — the identities, round-trips, rotational invariance and
 NaN sweeps — runs unconditionally, and is what CI checks on every push.
 
