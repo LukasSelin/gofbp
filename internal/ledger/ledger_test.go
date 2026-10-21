@@ -25,11 +25,10 @@ func TestLoadTheRealLedger(t *testing.T) {
 	if len(l.Log) < 1 {
 		t.Errorf("%d log entries", len(l.Log))
 	}
-	// One since 2026-10-21: rate_of_spread_at_theta.r, the one 🟡 row with work
-	// left in it. The acceleration model and the driver were the rest until
-	// they were ported that day.
-	if len(l.DependencyOrder) < 1 {
-		t.Errorf("dependency order: %v", l.DependencyOrder)
+	// Empty since 2026-10-21, when the last row with work in it went 🟢; the
+	// ledger says so with NothingOwed, which is what lets it parse.
+	if len(l.DependencyOrder) != 0 {
+		t.Errorf("dependency order: %v, want empty", l.DependencyOrder)
 	}
 
 	byKey := l.ByKey()
@@ -101,8 +100,10 @@ func TestDependencyOrderKeepsItsOrder(t *testing.T) {
 	// Updating
 	// it IS the check: a parser that deduplicated or reordered the list would
 	// land on something else.
-	if got := l.DependencyOrder[0]; got != "rate_of_spread_at_theta.r" {
-		t.Errorf("first item = %q, want rate_of_spread_at_theta.r — the only row left with work in it", got)
+	// Since 2026-10-21 there is no top row: the list is empty and says so. A
+	// row going back to 🔴 must reappear here, and this is the line to update.
+	if len(l.DependencyOrder) != 0 {
+		t.Errorf("first item = %q, want an empty list", l.DependencyOrder[0])
 	}
 	seen := map[string]bool{}
 	for _, f := range l.DependencyOrder {
@@ -186,6 +187,18 @@ func TestADependencyOrderWithNoFilenamesIsAnError(t *testing.T) {
 	}
 	if _, err := Load(path); err == nil {
 		t.Error("a dependency order naming no files parsed cleanly")
+	}
+
+	// The same empty list, saying in words that it is empty, is fine.
+	said := head + dependencyHeading + "\n\n" + NothingOwed + "\n\n## " + after
+	if err := os.WriteFile(path, []byte(said), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	l, err := Load(path)
+	if err != nil {
+		t.Errorf("an empty dependency order that says %q did not parse: %v", NothingOwed, err)
+	} else if len(l.DependencyOrder) != 0 {
+		t.Errorf("dependency order = %v, want empty", l.DependencyOrder)
 	}
 }
 

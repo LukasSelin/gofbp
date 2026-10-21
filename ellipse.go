@@ -139,7 +139,8 @@ func FlankROS(rosHead, rosBack, lb float64) float64 {
 //     fraction; cffdrs parenthesises both leading terms together first. One
 //     misplaced parenthesis is the whole defect.
 //
-// So the reference this function is asserted against is the paper itself.
+// So the reference this function is asserted against is the paper itself, and
+// the ledger row is 🟢 — ported, with no cffdrs column that could be its oracle.
 // ROSAtAngle IS the published eq. 94: it solves the same ray-from-ignition-point
 // intersection the closed form expresses, agrees with it to 7.9e-13 across a
 // 46,016-point grid (TestROSAtAngleIsPublishedEquation94), is defined at 90°
