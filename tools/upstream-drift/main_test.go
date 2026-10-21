@@ -37,13 +37,13 @@ func in(rep *report, file string) (change, bool) {
 // The join is the whole tool. These are the answers step 2 asks for, against the
 // real ledger, so a row moving between statuses changes what this reports. There
 // has been no 🔴 row to join to since 2026-10-21, when the acceleration model
-// was ported; the 🟡 rows are what is still owed, and they rank with 🔴 (see
-// severity).
+// and the driver were ported; the 🟡 rows are what is still owed, and they rank
+// with 🔴 (see severity).
 func TestChangedFileJoinsToItsLedgerRow(t *testing.T) {
 	rep := classified(t,
 		changedFile{"R/rate_of_spread.r", "modified"},          // ✅
 		changedFile{"R/rate_of_spread_at_time.r", "modified"},  // ✅, a three-file row
-		changedFile{"R/fbp.r", "modified"},                     // 🟡, the driver
+		changedFile{"R/fbp.r", "modified"},                     // ✅, the driver
 		changedFile{"R/hffmc.r", "modified"},                   // ⚪
 		changedFile{"R/direction.r", "modified"},               // 🟢
 		changedFile{"R/rate_of_spread_at_theta.r", "modified"}, // 🟡
@@ -52,7 +52,7 @@ func TestChangedFileJoinsToItsLedgerRow(t *testing.T) {
 	for _, tc := range []struct{ file, want string }{
 		{"rate_of_spread.r", ledger.Ported},
 		{"rate_of_spread_at_time.r", ledger.Ported},
-		{"fbp.r", ledger.Partial},
+		{"fbp.r", ledger.Ported},
 		{"hffmc.r", ledger.OutOfScope},
 		{"direction.r", ledger.Invariant},
 		{"rate_of_spread_at_theta.r", ledger.Partial},
@@ -73,7 +73,7 @@ func TestChangedFileJoinsToItsLedgerRow(t *testing.T) {
 func TestVerdictRanksAnAssertedRowAboveEverythingElse(t *testing.T) {
 	asserted := classified(t,
 		changedFile{"R/hffmc.r", "modified"},
-		changedFile{"R/fbp.r", "modified"},
+		changedFile{"R/rate_of_spread_at_theta.r", "modified"},
 		changedFile{"R/buildup_effect.r", "modified"}, // ✅
 	)
 	if asserted.Exit != exitAsserted {
@@ -85,7 +85,7 @@ func TestVerdictRanksAnAssertedRowAboveEverythingElse(t *testing.T) {
 
 	owed := classified(t,
 		changedFile{"R/hffmc.r", "modified"},
-		changedFile{"R/fbp.r", "modified"},
+		changedFile{"R/rate_of_spread_at_theta.r", "modified"},
 	)
 	if owed.Exit != exitInScope {
 		t.Errorf("exit = %d, want %d (only a row still owed changed)", owed.Exit, exitInScope)
@@ -140,7 +140,7 @@ func TestAFileWithTwoRowsReportsBoth(t *testing.T) {
 // decided whether it is in scope.
 func TestAnUnknownRFileOutranksARowStillOwed(t *testing.T) {
 	rep := classified(t,
-		changedFile{"R/fbp.r", "modified"},
+		changedFile{"R/rate_of_spread_at_theta.r", "modified"},
 		changedFile{"R/fire_growth.r", "added"},
 	)
 	c, ok := in(rep, "fire_growth.r")

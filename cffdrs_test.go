@@ -70,15 +70,27 @@ type cffdrsCase struct {
 	DH    float64 `json:"dh"`
 	DB    float64 `json:"db"`
 	DF    float64 `json:"df"`
-	ISI   float64 `json:"isi"`
-	BE    float64 `json:"be"`
-	SF    float64 `json:"sf"`
-	WSV   float64 `json:"wsv"`
-	FMC   float64 `json:"fmc"`
-	SFC   float64 `json:"sfc"`
-	CSI   float64 `json:"csi"`
-	RSO   float64 `json:"rso"`
-	CFB   float64 `json:"cfb"`
+	// What fbp()'s driver computes inline — see TestCFFDRSPredict. RAZ is in
+	// degrees, towards; TI/FTI/BTI are minutes to crown-fire initiation.
+	RAZ  float64 `json:"raz"`
+	FCFB float64 `json:"fcfb"`
+	BCFB float64 `json:"bcfb"`
+	FTFC float64 `json:"ftfc"`
+	BTFC float64 `json:"btfc"`
+	FFI  float64 `json:"ffi"`
+	BFI  float64 `json:"bfi"`
+	TI   float64 `json:"ti"`
+	FTI  float64 `json:"fti"`
+	BTI  float64 `json:"bti"`
+	ISI  float64 `json:"isi"`
+	BE   float64 `json:"be"`
+	SF   float64 `json:"sf"`
+	WSV  float64 `json:"wsv"`
+	FMC  float64 `json:"fmc"`
+	SFC  float64 `json:"sfc"`
+	CSI  float64 `json:"csi"`
+	RSO  float64 `json:"rso"`
+	CFB  float64 `json:"cfb"`
 	// CFC and TFC are eqs. 66a/66b/66c and 67. Both embed the CFL fbp() actually
 	// used, which on a row that sent the −1 sentinel is the per-fuel table value
 	// and not the −1 recorded in CFL above — so only usableForConsumption rows

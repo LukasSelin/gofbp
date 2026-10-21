@@ -497,7 +497,8 @@ if (!identical(as.integer(as.character(out$ID)), inp$ID)) {
 # side skips them by name.
 needed <- c("ISI", "BE", "SF", "WSV", "CFB", "FD", "ROS", "LB", "BROS", "FROS",
             "FMC", "SFC", "CSI", "RSO", "CFC", "TFC", "HFI",
-            "HROSt", "BROSt", "FROSt", "LBt", "DH", "DB", "DF")
+            "HROSt", "BROSt", "FROSt", "LBt", "DH", "DB", "DF",
+            "RAZ", "FCFB", "BCFB", "FTFC", "BTFC", "FFI", "BFI", "TI", "FTI", "BTI")
 missing <- setdiff(needed, names(out))
 if (length(missing)) {
   stop("cffdrs ", packageVersion("cffdrs"), " did not return: ",
@@ -592,6 +593,23 @@ case_json <- function(i) {
     ', "dh": ', num(out$DH[i]),
     ', "db": ', num(out$DB[i]),
     ', "df": ', num(out$DF[i]),
+    # What fbp()'s driver computes INLINE rather than in a function of its own:
+    # the head azimuth RAZ (degrees, towards), the flank and back crown fractions
+    # and the consumptions and intensities built on them, and the three times to
+    # crown-fire initiation. These are what predict.go adds over the composition
+    # of the ported functions, so they are the driver's own assertions. The theta
+    # outputs (TROS, TROSt, TCFB, TFI, TTFC, TTI) are deliberately not emitted --
+    # see MIGRATION.md's rate_of_spread_at_theta.r row.
+    ', "raz": ', num(out$RAZ[i]),
+    ', "fcfb": ', num(out$FCFB[i]),
+    ', "bcfb": ', num(out$BCFB[i]),
+    ', "ftfc": ', num(out$FTFC[i]),
+    ', "btfc": ', num(out$BTFC[i]),
+    ', "ffi": ', num(out$FFI[i]),
+    ', "bfi": ', num(out$BFI[i]),
+    ', "ti": ', num(out$TI[i]),
+    ', "fti": ', num(out$FTI[i]),
+    ', "bti": ', num(out$BTI[i]),
     ', "fd": ', q(as.character(out$FD[i])),
     ', "ros": ', num(out$ROS[i]),
     ', "lb": ', num(out$LB[i]),

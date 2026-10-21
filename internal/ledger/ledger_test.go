@@ -25,8 +25,9 @@ func TestLoadTheRealLedger(t *testing.T) {
 	if len(l.Log) < 1 {
 		t.Errorf("%d log entries", len(l.Log))
 	}
-	// One since 2026-10-21: the driver, fbp.r. The acceleration model's three
-	// files were the rest until they were ported that day.
+	// One since 2026-10-21: rate_of_spread_at_theta.r, the one 🟡 row with work
+	// left in it. The acceleration model and the driver were the rest until
+	// they were ported that day.
 	if len(l.DependencyOrder) < 1 {
 		t.Errorf("dependency order: %v", l.DependencyOrder)
 	}
@@ -95,12 +96,13 @@ func TestDependencyOrderKeepsItsOrder(t *testing.T) {
 	}
 	// This tracks the ledger's current top row, so it moves with every port —
 	// SFC held it until 2026-09-18, then FMC for the rest of that day, then the
-	// CBH/CFL tables and then the acceleration model, both ported on 2026-10-21.
+	// CBH/CFL tables, the acceleration model and the driver, all ported on
+	// 2026-10-21.
 	// Updating
 	// it IS the check: a parser that deduplicated or reordered the list would
 	// land on something else.
-	if got := l.DependencyOrder[0]; got != "fbp.r" {
-		t.Errorf("first item = %q, want fbp.r — the driver is the only row left", got)
+	if got := l.DependencyOrder[0]; got != "rate_of_spread_at_theta.r" {
+		t.Errorf("first item = %q, want rate_of_spread_at_theta.r — the only row left with work in it", got)
 	}
 	seen := map[string]bool{}
 	for _, f := range l.DependencyOrder {
