@@ -1,6 +1,6 @@
 ---
 description: Port one row from the migration ledger — oracle column first, then the Go, then the tests and the ledger
-argument-hint: "[ledger row, e.g. acceleration | fbp.r] (default: top unblocked)"
+argument-hint: "[ledger row, e.g. fbp.r] (default: top unblocked)"
 allowed-tools: Bash(go run ./tools/...:*), Bash(git:*), Bash(go test:*), Bash(go build:*), Bash(go vet:*), Bash(./testdata/regen-cffdrs.sh:*), Bash(sha256sum:*), Bash(cp:*), Bash(gh pr create:*), Bash(gh pr view:*), Read, Edit, Write, Glob, Grep, WebFetch
 ---
 
@@ -147,7 +147,7 @@ sent *above* the honoured range (CBH > 50, CFL > 2) is substituted exactly like
   0. **Anything else is the finding — stop and report it.** The tool keys cases
   by their inputs, so added rows and a reordered sweep are not a diff; only a
   changed number is. This is the check the whole repository is organised around,
-  and it is not something eyes do over 24,383 cases.
+  and it is not something eyes do over 25,097 cases.
 - [ ] `go test ./... -run TestCFFDRS`, and report the per-fuel counts the test logs. A test asserting three hundred rows when you expected three thousand is passing for the wrong reason.
 - [ ] Write the `TestCFFDRS*` — and give it a **`ledger:` line in its doc comment** naming the upstream R file it asserts:
 

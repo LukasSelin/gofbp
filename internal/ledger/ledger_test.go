@@ -25,22 +25,25 @@ func TestLoadTheRealLedger(t *testing.T) {
 	if len(l.Log) < 1 {
 		t.Errorf("%d log entries", len(l.Log))
 	}
-	// Four since 2026-10-21: the acceleration model's three files and fbp.r.
-	if len(l.DependencyOrder) < 4 {
+	// One since 2026-10-21: the driver, fbp.r. The acceleration model's three
+	// files were the rest until they were ported that day.
+	if len(l.DependencyOrder) < 1 {
 		t.Errorf("dependency order: %v", l.DependencyOrder)
 	}
 
 	byKey := l.ByKey()
 	// A row that owns several upstream files must be reachable by each of them,
 	// and the index must carry the row's real status rather than the first one it
-	// saw. Two rows exercise that: FMC, which owns two files and is ported, and
-	// the acceleration model, which owns three and is still owed.
+	// saw. Two rows exercise that: FMC, which owns two files, and the
+	// acceleration model, which owns three. Both are ported — the acceleration
+	// model was the last 🔴 row, until 2026-10-21 — so what this checks now is
+	// that every file of a multi-file row reaches the same row.
 	for _, tc := range []struct {
 		files  []string
 		status string
 	}{
 		{[]string{"foliar_moisture_content.r", "foliar_moisture_content_minimum.r"}, Ported},
-		{[]string{"rate_of_spread_at_time.r", "distance_at_time.r", "length_to_breadth_at_time.r"}, Missing},
+		{[]string{"rate_of_spread_at_time.r", "distance_at_time.r", "length_to_breadth_at_time.r"}, Ported},
 	} {
 		for _, f := range tc.files {
 			r, ok := byKey[f]
@@ -92,12 +95,12 @@ func TestDependencyOrderKeepsItsOrder(t *testing.T) {
 	}
 	// This tracks the ledger's current top row, so it moves with every port —
 	// SFC held it until 2026-09-18, then FMC for the rest of that day, then the
-	// CBH/CFL tables until they were ported on 2026-10-21. Updating
+	// CBH/CFL tables and then the acceleration model, both ported on 2026-10-21.
+	// Updating
 	// it IS the check: a parser that deduplicated or reordered the list would
 	// land on something else.
-	if got := l.DependencyOrder[0]; got != "rate_of_spread_at_time.r" {
-		t.Errorf("first item = %q, want rate_of_spread_at_time.r — the acceleration model is "+
-			"the top unblocked row", got)
+	if got := l.DependencyOrder[0]; got != "fbp.r" {
+		t.Errorf("first item = %q, want fbp.r — the driver is the only row left", got)
 	}
 	seen := map[string]bool{}
 	for _, f := range l.DependencyOrder {

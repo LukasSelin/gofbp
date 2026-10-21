@@ -53,11 +53,12 @@ import (
 // latitude.
 //
 // sd and sh joined it with the CBH/CFL defaults block (C6's stand density and
-// height). The same rule applies, and the block gives each of its stand rows a
-// latitude of its own for the same reason.
+// height), and hr and accel with the acceleration block. The same rule applies:
+// the stand rows each get a latitude of their own, and the acceleration rows a
+// flat-ground wind direction per hour, for the same reason.
 var inputCols = []string{
 	"fuel", "ffmc", "bui", "ws", "wd", "gs", "pc", "pdf", "cc", "cbh", "cfl",
-	"lat", "long", "elv", "dj", "d0", "sd", "sh",
+	"lat", "long", "elv", "dj", "d0", "sd", "sh", "hr", "accel",
 }
 
 // fwiInputCols identify a case in the FWI System's section, "fwi_cases" — a
