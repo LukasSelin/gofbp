@@ -404,3 +404,55 @@ func TestInChunksCoversEveryCellOnce(t *testing.T) {
 		}
 	}
 }
+
+// A panic in a worker reaches the caller, on the calling goroutine, once every
+// worker has stopped, with the value it was raised with; the serial path
+// panics the same. A process-killing panic would end the test binary instead.
+func TestInChunksPassesPanicsBack(t *testing.T) {
+	type boom struct{ lo, hi int }
+	for _, tc := range []struct {
+		n, workers int
+		panicAt    func(lo, hi int) bool
+	}{
+		{1000, 1, func(lo, hi int) bool { return lo <= 500 && 500 < hi }},
+		{1000, 4, func(lo, hi int) bool { return lo == 0 }},
+		{1000, 7, func(lo, hi int) bool { return lo <= 999 && 999 < hi }},
+		{1000, 24, func(lo, hi int) bool { return true }}, // every chunk
+		{3, 5, func(lo, hi int) bool { return lo == 1 }},
+	} {
+		var running, cells atomic.Int64
+		got := func() (p any) {
+			defer func() { p = recover() }()
+			inChunks(tc.n, tc.workers, func(lo, hi int) {
+				running.Add(1)
+				defer running.Add(-1)
+				if tc.panicAt(lo, hi) {
+					panic(boom{lo, hi})
+				}
+				cells.Add(int64(hi - lo))
+			})
+			return nil
+		}()
+		b, ok := got.(boom)
+		if !ok || !tc.panicAt(b.lo, b.hi) {
+			t.Errorf("n %d, %d workers: recovered %#v, want a boom from a panicking chunk", tc.n, tc.workers, got)
+		}
+		if r := running.Load(); r != 0 {
+			t.Errorf("n %d, %d workers: %d calls of f still running after the panic reached the caller", tc.n, tc.workers, r)
+		}
+		if c := cells.Load(); c >= int64(tc.n) {
+			t.Errorf("n %d, %d workers: %d cells done, want fewer than %d", tc.n, tc.workers, c, tc.n)
+		}
+	}
+
+	// A runtime error keeps its type, so the caller sees what the worker saw.
+	got := func() (p any) {
+		defer func() { p = recover() }()
+		var v []int
+		inChunks(100, 4, func(lo, hi int) { _ = v[lo] })
+		return nil
+	}()
+	if _, ok := got.(interface{ RuntimeError() }); !ok {
+		t.Errorf("index out of range came back as %#v, want a runtime.Error", got)
+	}
+}

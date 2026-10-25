@@ -285,6 +285,17 @@ const chunksPerWorker = 8
 // writes only its own cells, so no value depends on it. The join is one
 // channel receive per worker, which is also what publishes the workers' writes
 // to the caller.
+//
+// A panic in f does not kill the process, as it would if left on a worker: the
+// worker recovers it, drains the chunks no one has taken so the others stop
+// after the chunk they are on, and sends the value over the join channel. Once
+// every worker has stopped, inChunks panics with it on the calling goroutine,
+// so a parallel run fails as the serial path does, with a value the caller can
+// recover — and no goroutine is left writing into the output. If several
+// chunks panic, the first value received is the one re-raised, which need not
+// be the lowest chunk's, and the stack trace is the caller's, not the
+// worker's. Cells not reached are left as they were, as they are when the
+// serial path panics.
 func inChunks(n, workers int, f func(lo, hi int)) {
 	if workers > n {
 		workers = n
@@ -300,9 +311,17 @@ func inChunks(n, workers int, f func(lo, hi int)) {
 	}
 	close(next)
 	size, extra := n/chunks, n%chunks
-	done := make(chan struct{}, workers)
+	done := make(chan any, workers)
 	for w := 0; w < workers; w++ {
 		go func() {
+			defer func() {
+				p := recover()
+				if p != nil {
+					for range next {
+					}
+				}
+				done <- p
+			}()
 			for c := range next {
 				lo := c*size + min(c, extra)
 				hi := lo + size
@@ -311,11 +330,16 @@ func inChunks(n, workers int, f func(lo, hi int)) {
 				}
 				f(lo, hi)
 			}
-			done <- struct{}{}
 		}()
 	}
+	var first any
 	for w := 0; w < workers; w++ {
-		<-done
+		if p := <-done; p != nil && first == nil {
+			first = p
+		}
+	}
+	if first != nil {
+		panic(first)
 	}
 }
 
