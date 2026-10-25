@@ -78,6 +78,15 @@ func Step(yesterday State, w Weather, month int, latDeg float64) (State, Indices
 		nan := math.NaN()
 		return State{nan, nan, nan}, Indices{nan, nan, nan, nan, nan, nan, nan}
 	}
+	ix := step(yesterday, w, month, latDeg)
+	return ix.State(), ix
+}
+
+// step is Step without its refusal: the RH clamp and the seven outputs, each
+// NaN only if an input it reads is. StepGrid needs exactly that, because
+// fwiRaster() lets a missing cell value through to the components, where
+// Step's single-station contract is to poison the whole day instead.
+func step(yesterday State, w Weather, month int, latDeg float64) Indices {
 	rh := w.RHPct
 	if rh >= 100 {
 		rh = rhCeiling
@@ -92,5 +101,5 @@ func Step(yesterday State, w Weather, month int, latDeg float64) (State, Indices
 	ix.BUI = BUI(ix.DMC, ix.DC)
 	ix.FWI = FWI(ix.ISI, ix.BUI)
 	ix.DSR = DSR(ix.FWI)
-	return ix.State(), ix
+	return ix
 }

@@ -21,8 +21,11 @@
 // fwi() does that the component functions do not: it clamps relative humidity
 // at or above 100 % to 99.9999 before any code sees it.
 //
+// StepGrid is Step over a grid of cells, the way cffdrs' fwiRaster() computes
+// it, taking one plain slice per layer.
+//
 // What it is not: a time-series driver. There is no loop over days, no
-// gridding, no start-of-season or overwintering logic, and no default for a
+// raster I/O, no start-of-season or overwintering logic, and no default for a
 // missing latitude or month (fwi() falls back to 55 °N and July with only a
 // warning). Where a
 // season starts, what the codes start at, and what to do across a gap in the
@@ -77,6 +80,6 @@
 // The TestCFFDRS* tests in this package assert every function against the
 // cffdrs fixture (testdata/cffdrs.json, generated rather than committed — see
 // testdata/README.md): each component over a grid that reaches every branch,
-// fwi()'s one-day step, multi-day chains run through fwi() itself, and
-// cffdrs' own test_fwi sample dataset.
+// fwi()'s one-day step, multi-day chains run through fwi() itself,
+// cffdrs' own test_fwi sample dataset, and fwiRaster() over small grids.
 package fwi

@@ -210,7 +210,15 @@ yesterday's value and today's weather — `FFMC`, `DMC`, `DC` — then `ISI`, `B
 latitude-adjusted day-length factors `fwi()` applies (`lat.adjust = TRUE`).
 `Step` chains one day exactly the way one iteration of `fwi()`'s loop does,
 including the one thing `fwi()` does that the codes do not: relative humidity
-at or above 100 % becomes 99.9999 before any code sees it.
+at or above 100 % becomes 99.9999 before any code sees it. `StepGrid` is the
+same day over a grid, as cffdrs' `fwiRaster()` computes it: one slice per layer
+(temperature, RH, wind, precipitation, latitude, and yesterday's three codes),
+all the same length, in whatever cell order your raster library uses. It
+refuses a negative precipitation, wind or RH anywhere with a `*GridError`, as
+`fwiRaster()` stops, and lets a NaN cell through to only the outputs that read
+it, as terra's NA does — a cell with no wind still has a DMC. It runs the cells
+in sequence; they are independent, so split the slices across goroutines if you
+want parallelism.
 
 ```go
 s := fwi.StartupState() // FFMC 85, DMC 6, DC 15 — your choice, not a default
@@ -247,9 +255,9 @@ total falls under the rain thresholds (0.5, 1.5 and 2.8 mm) almost every time,
 so the codes never wet and the season looks drier every day it goes on.
 
 **What it deliberately is not:** a time-series driver. There is no loop over
-days, no gridding, no start-of-season or overwintering logic, and no default for
-a missing latitude or month (`fwi()` falls back to 55 °N and July with only a
-warning). Where a season starts, what the codes start from, and what to do across
+days, no raster I/O, no start-of-season or overwintering logic, and no default for
+a missing latitude or month (`fwi()` and `fwiRaster()` fall back to 55 °N and July
+with only a warning). Where a season starts, what the codes start from, and what to do across
 a gap in the weather are the caller's decisions, next to the data that decides
 them — `StartupFFMC`, `StartupDMC` and `StartupDC` are exported so the
 conventional start is something you pass rather than inherit. `fwi()`'s refusal
@@ -262,13 +270,14 @@ the altered DMC rain equations, which cost about 0.11 % of DMC per rain day
 against the paper; FFMC clamped to [0, 101]; and the RH clamp in `Step`. The
 package doc and [MIGRATION.md](MIGRATION.md) list each with its evidence.
 
-**Correctness.** Nine `TestCFFDRS*` assert it against the same pinned oracle as
+**Correctness.** Ten `TestCFFDRS*` assert it against the same pinned oracle as
 `fbp`: every component over grids that reach every branch (each rain threshold
 from both sides, both temperature floors, RH 0 and 100, zero and 150 km/h wind,
 every month, every `lat.adjust` band of both the DMC and the DC), 3,420 one-day
 `fwi()` runs, ten chains of 40 to 120 days through `fwi()` itself with the Go
-carrying its own state, and cffdrs' own `test_fwi` sample. The worst relative
-error anywhere is 1e-14.
+carrying its own state, cffdrs' own `test_fwi` sample, and 2,270 cells of
+`fwiRaster()` grids, NA cells included. The worst relative error anywhere is
+1e-14.
 
 ## Fuel codes
 
@@ -493,7 +502,7 @@ the pinned oracle on 2026-09-18; see `ROSAtAngle`'s doc comment and
 [MIGRATION.md](MIGRATION.md).
 
 **The `Go` workflow does not run the oracle.** The 15.8 MB fixture is generated
-rather than committed, so the thirty-five fixture-backed tests skip on a fresh clone
+rather than committed, so the thirty-six fixture-backed tests skip on a fresh clone
 and a green `Go` badge means the identities, round-trips, invariants and NaN
 sweeps pass.
 

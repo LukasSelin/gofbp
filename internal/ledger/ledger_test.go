@@ -103,8 +103,8 @@ func TestDependencyOrderKeepsItsOrder(t *testing.T) {
 	// land on something else.
 	// From 2026-10-21 to 2026-10-25 there was no top row: the list was empty and
 	// said so. The 2026-10-25 re-scope brought the two raster wrappers back, FWI
-	// first.
-	want := []string{"fwiRaster.r", "fbpRaster.r"}
+	// first, and fwiRaster.r was ported the same day.
+	want := []string{"fbpRaster.r"}
 	if !slices.Equal(l.DependencyOrder, want) {
 		t.Errorf("dependency order = %q, want %q", l.DependencyOrder, want)
 	}
