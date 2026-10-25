@@ -97,8 +97,9 @@ func StepGrid(yesterday GridState, w Grid, month int) (GridIndices, error) {
 }
 
 // StepGridParallel is StepGrid with its cells shared among workers goroutines:
-// the grid is split into that many contiguous blocks, one goroutine each, every
-// one writing only its own block of the output. It changes no value and no
+// the grid is cut into a few contiguous chunks per worker, each worker takes
+// the next chunk until none is left, and each chunk writes only its own cells
+// of the output. It changes no value and no
 // cell's place — a cell is the same arithmetic on whichever goroutine runs it,
 // so the result is bit-identical to StepGrid's. The refusals are StepGrid's and
 // come first, on the calling goroutine, so a refused grid starts no worker and
@@ -216,11 +217,31 @@ func stepCells(yesterday GridState, w Grid, month int, out GridIndices, lo, hi i
 	}
 }
 
-// inChunks runs f over [0, n) split into contiguous blocks, one goroutine per
-// block, and returns when all of them have. With one block or none to share —
-// workers <= 1, or n <= 1 — it is f(0, n) on the calling goroutine. The blocks
-// differ in size by at most one cell, and the join is one channel receive per
-// block, which is also what publishes each block's writes to the caller.
+// chunksPerWorker is how many chunks inChunks cuts per worker. One block per
+// worker leaves the call waiting on the slowest block, and the cost of a cell
+// is not uniform: an FBP cell refused for NF or WA costs a fraction of a C6
+// crown fire, and a raster puts them in patches. With several chunks each, a
+// worker that finishes early takes another. Against one block per worker, at
+// 100k cells and 24 workers on a 12-core Ryzen 9 3900X, 8 took 16% off the
+// clustered FBP grid in bench_test.go and 39% off the uniform FWI grid (where
+// cells cost alike but workers do not run alike: they start at different
+// times, and at 24 two share each core). 4 was within noise of 8 on the
+// clustered grid and took only 32% off the FWI one.
+const chunksPerWorker = 8
+
+// inChunks runs f over [0, n) cut into contiguous chunks, on workers
+// goroutines, and returns when all of them have. With one worker or no more
+// than one cell — workers <= 1, or n <= 1 — it is f(0, n) on the calling
+// goroutine.
+//
+// There are chunksPerWorker chunks per worker (at most n), differing in size by
+// at most one cell, and they are handed out in order through a buffered
+// channel of chunk indices, filled and closed before any worker starts: each
+// worker takes the next index until there are none. Which goroutine runs a
+// chunk is the scheduler's, but every cell is in exactly one chunk and f
+// writes only its own cells, so no value depends on it. The join is one
+// channel receive per worker, which is also what publishes the workers' writes
+// to the caller.
 func inChunks(n, workers int, f func(lo, hi int)) {
 	if workers > n {
 		workers = n
@@ -229,18 +250,26 @@ func inChunks(n, workers int, f func(lo, hi int)) {
 		f(0, n)
 		return
 	}
+	chunks := min(workers*chunksPerWorker, n)
+	next := make(chan int, chunks)
+	for c := 0; c < chunks; c++ {
+		next <- c
+	}
+	close(next)
+	size, extra := n/chunks, n%chunks
 	done := make(chan struct{}, workers)
-	size, extra := n/workers, n%workers
-	for w, lo := 0, 0; w < workers; w++ {
-		hi := lo + size
-		if w < extra {
-			hi++
-		}
-		go func(lo, hi int) {
-			f(lo, hi)
+	for w := 0; w < workers; w++ {
+		go func() {
+			for c := range next {
+				lo := c*size + min(c, extra)
+				hi := lo + size
+				if c < extra {
+					hi++
+				}
+				f(lo, hi)
+			}
 			done <- struct{}{}
-		}(lo, hi)
-		lo = hi
+		}()
 	}
 	for w := 0; w < workers; w++ {
 		<-done

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"math"
 	"strconv"
+	"sync/atomic"
 	"testing"
 )
 
@@ -395,5 +396,29 @@ func TestStepGridSerialAllocations(t *testing.T) {
 	}
 	if a := testing.AllocsPerRun(20, func() { StepGridInto(out, y, g, 7, 1) }); a != 0 {
 		t.Errorf("StepGridInto, 1 worker: %v allocations, want 0", a)
+	}
+}
+
+// inChunks hands every cell to f exactly once, in chunks that tile [0, n),
+// whatever the worker count.
+func TestInChunksCoversEveryCellOnce(t *testing.T) {
+	for _, n := range []int{0, 1, 2, 3, 7, 64, 1000, 1001} {
+		for _, workers := range []int{-1, 0, 1, 2, 3, 7, n + 5} {
+			seen := make([]int32, n)
+			inChunks(n, workers, func(lo, hi int) {
+				if lo > hi || lo < 0 || hi > n {
+					t.Errorf("n %d, %d workers: chunk [%d, %d)", n, workers, lo, hi)
+					return
+				}
+				for i := lo; i < hi; i++ {
+					atomic.AddInt32(&seen[i], 1)
+				}
+			})
+			for i, c := range seen {
+				if c != 1 {
+					t.Fatalf("n %d, %d workers: cell %d seen %d times", n, workers, i, c)
+				}
+			}
+		}
 	}
 }
