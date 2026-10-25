@@ -74,3 +74,53 @@ func BenchmarkStepGridInto(b *testing.B) {
 		})
 	}
 }
+
+// BenchmarkStepGridDays is ten days over 100k cells, both ways, each into one
+// reused buffer stepped in place so neither pays for memory: mode=chained is
+// StepGridInto ten times, a fork and join per day; mode=fused is one
+// StepGridDaysInto, a fork and join per call with each chunk taken through all
+// ten days.
+func BenchmarkStepGridDays(b *testing.B) {
+	const n, nDays = 100_000, 10
+	y, _ := benchStepGrid(n, 1)
+	days := make([]GridDay, nDays)
+	for d := range days {
+		_, w := benchStepGrid(n, int64(d+2))
+		days[d] = GridDay{Weather: w, Month: 5 + d%4}
+	}
+	one := GridIndices{make([]float64, n), make([]float64, n), make([]float64, n), make([]float64, n),
+		make([]float64, n), make([]float64, n), make([]float64, n)}
+	reset := func() {
+		copy(one.FFMC, y.FFMC)
+		copy(one.DMC, y.DMC)
+		copy(one.DC, y.DC)
+	}
+	same := make([]GridIndices, nDays)
+	for d := range same {
+		same[d] = one
+	}
+	for _, mode := range []string{"chained", "fused"} {
+		for _, workers := range benchWorkers {
+			b.Run("mode="+mode+"/workers="+strconv.Itoa(workers), func(b *testing.B) {
+				b.ReportAllocs()
+				for i := 0; i < b.N; i++ {
+					b.StopTimer()
+					reset()
+					b.StartTimer()
+					if mode == "fused" {
+						if err := StepGridDaysInto(same, one.State(), days, workers); err != nil {
+							b.Fatal(err)
+						}
+						continue
+					}
+					for _, day := range days {
+						if err := StepGridInto(one, one.State(), day.Weather, day.Month, workers); err != nil {
+							b.Fatal(err)
+						}
+					}
+				}
+				b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N*n*nDays), "ns/cell-day")
+			})
+		}
+	}
+}

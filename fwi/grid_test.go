@@ -422,3 +422,192 @@ func TestInChunksCoversEveryCellOnce(t *testing.T) {
 		}
 	}
 }
+
+// daysOf is d days over g's cells: each day's weather a shifted copy of g's,
+// so no two days are alike, and the months running on from July.
+func daysOf(g Grid, d int) []GridDay {
+	shift := func(v []float64, k int, add float64) []float64 {
+		out := make([]float64, len(v))
+		for i := range v {
+			out[i] = v[(i+k)%len(v)] + add
+		}
+		return out
+	}
+	days := make([]GridDay, d)
+	for k := range days {
+		days[k] = GridDay{Month: 7 + k%6, Weather: Grid{
+			TempC: shift(g.TempC, 3*k, float64(k)), RHPct: shift(g.RHPct, 5*k, 0),
+			WindKmh: shift(g.WindKmh, 7*k, 0), PrecipMm: shift(g.PrecipMm, 11*k, 0),
+			LatDeg: g.LatDeg,
+		}}
+	}
+	return days
+}
+
+// chainStepGrid is StepGrid called once per day, each day handed the last.
+func chainStepGrid(t *testing.T, y GridState, days []GridDay) []GridIndices {
+	t.Helper()
+	var out []GridIndices
+	for _, day := range days {
+		ix, err := StepGrid(y, day.Weather, day.Month)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, ix)
+		y = ix.State()
+	}
+	return out
+}
+
+// StepGridDays is the chain of StepGrid calls, every day to the bit, at every
+// worker count, into its own slices, into dirty buffers, and in place in one.
+func TestStepGridDaysIsChainedStepGrid(t *testing.T) {
+	for _, tc := range parallelCases() {
+		n := len(tc.g.TempC)
+		for _, nDays := range []int{0, 1, 5} {
+			days := daysOf(tc.g, nDays)
+			if n > 0 && nDays > 1 {
+				days[1].Weather.WindKmh[9] = math.NaN()
+			}
+			want := chainStepGrid(t, tc.y, days)
+			for _, workers := range parallelWorkers(n) {
+				name := tc.name + ", " + strconv.Itoa(nDays) + " days, " + strconv.Itoa(workers) + " workers"
+				got, err := StepGridDays(tc.y, days, workers)
+				if err != nil {
+					t.Fatalf("%s: %v", name, err)
+				}
+				if len(got) != nDays {
+					t.Fatalf("%s: %d days, want %d", name, len(got), nDays)
+				}
+				for d := range want {
+					sameIndices(t, name+", StepGridDays day "+strconv.Itoa(d), got[d], want[d])
+				}
+
+				into := make([]GridIndices, nDays)
+				for d := range into {
+					into[d] = newGridIndices(n)
+				}
+				if err := StepGridDaysInto(into, tc.y, days, workers); err != nil {
+					t.Fatalf("%s: StepGridDaysInto: %v", name, err)
+				}
+				for d := range want {
+					sameIndices(t, name+", StepGridDaysInto day "+strconv.Itoa(d), into[d], want[d])
+				}
+
+				// One buffer for every day, its codes yesterday's.
+				one := newGridIndices(n)
+				copy(one.FFMC, tc.y.FFMC)
+				copy(one.DMC, tc.y.DMC)
+				copy(one.DC, tc.y.DC)
+				same := make([]GridIndices, nDays)
+				for d := range same {
+					same[d] = one
+				}
+				if err := StepGridDaysInto(same, one.State(), days, workers); err != nil {
+					t.Fatalf("%s: StepGridDaysInto in place: %v", name, err)
+				}
+				if nDays > 0 {
+					sameIndices(t, name+", StepGridDaysInto in place, last day", one, want[nDays-1])
+				}
+			}
+		}
+	}
+}
+
+// Each day is refused as the chain would refuse it on that day — the first
+// refused day, StepGrid's error for it — before any day is computed.
+func TestStepGridDaysRefusesAsChainedStepGrid(t *testing.T) {
+	g, wx, _ := gridOf()
+	n := len(wx)
+	y := UniformGridState(StartupState(), n)
+	for _, tc := range []struct {
+		name  string
+		day   int
+		spoil func([]GridDay)
+	}{
+		{"negative precip on day 0", 0, func(ds []GridDay) { ds[0].Weather.PrecipMm[4] = -1 }},
+		{"negative wind on day 2, RH on day 3", 2, func(ds []GridDay) {
+			ds[2].Weather.WindKmh[n-1] = -1
+			ds[3].Weather.RHPct[0] = -1
+		}},
+		{"ragged day 1 before negative day 2", 1, func(ds []GridDay) {
+			ds[1].Weather.LatDeg = ds[1].Weather.LatDeg[:n-1]
+			ds[2].Weather.RHPct[0] = -1
+		}},
+		{"day 3 a different size from day 0", 3, func(ds []GridDay) {
+			w := &ds[3].Weather
+			w.TempC, w.RHPct, w.WindKmh, w.PrecipMm, w.LatDeg = w.TempC[1:], w.RHPct[1:], w.WindKmh[1:], w.PrecipMm[1:], w.LatDeg[1:]
+		}},
+	} {
+		days := daysOf(g, 4)
+		tc.spoil(days)
+		// The chain, up to the day it refuses.
+		var want error
+		yy := y
+		for _, day := range days {
+			ix, err := StepGrid(yy, day.Weather, day.Month)
+			if err != nil {
+				want = err
+				break
+			}
+			yy = ix.State()
+		}
+		var wge *GridError
+		if !errors.As(want, &wge) {
+			t.Fatalf("%s: the chain did not refuse: %v", tc.name, want)
+		}
+		for _, workers := range []int{1, 3, n + 5} {
+			got, err := StepGridDays(y, days, workers)
+			var de *DayError
+			if !errors.As(err, &de) || de.Day != tc.day || *de.Err != *wge || got != nil {
+				t.Errorf("%s, %d workers: err %v, want day %d: %v, and no output", tc.name, workers, err, tc.day, want)
+			}
+			var ge *GridError
+			if !errors.As(err, &ge) || *ge != *wge {
+				t.Errorf("%s, %d workers: errors.As does not reach the GridError: %v", tc.name, workers, err)
+			}
+			into := make([]GridIndices, len(days))
+			for d := range into {
+				into[d] = newGridIndices(n)
+			}
+			err = StepGridDaysInto(into, y, days, workers)
+			if !errors.As(err, &de) || de.Day != tc.day || *de.Err != *wge || into[0].FFMC[0] != -12345 {
+				t.Errorf("%s, %d workers: StepGridDaysInto err %v, want day %d: %v, and nothing written", tc.name, workers, err, tc.day, want)
+			}
+		}
+	}
+
+	// StepGridDaysInto's own: the count of out first, then each day's
+	// out lengths after that day's grid.
+	days := daysOf(g, 3)
+	into := []GridIndices{newGridIndices(n), newGridIndices(n)}
+	var ge *GridError
+	if err := StepGridDaysInto(into, y, days, 2); !errors.As(err, &ge) || ge.Layer != "out" {
+		t.Errorf("two outs for three days: %v", err)
+	}
+	into = append(into, newGridIndices(n))
+	into[1].BUI = into[1].BUI[:2]
+	days[2].Weather.PrecipMm[0] = -1
+	var de *DayError
+	if err := StepGridDaysInto(into, y, days, 2); !errors.As(err, &de) || de.Day != 1 || de.Err.Layer != "out.BUI" {
+		t.Errorf("short out[1].BUI before negative day 2: %v", err)
+	}
+	if de != nil && de.Error() != "fwi: day 1 of the run: output slice out.BUI differs in length from TempC" {
+		t.Errorf("DayError message: %q", de.Error())
+	}
+}
+
+// The fused serial path allocates nothing of its own.
+func TestStepGridDaysSerialAllocations(t *testing.T) {
+	g, wx, _ := gridOf()
+	n := len(wx)
+	days := daysOf(g, 3)
+	y := UniformGridState(StartupState(), n)
+	out := []GridIndices{newGridIndices(n), newGridIndices(n), newGridIndices(n)}
+	if a := testing.AllocsPerRun(20, func() { StepGridDaysInto(out, y, days, 1) }); a != 0 {
+		t.Errorf("StepGridDaysInto, 1 worker: %v allocations, want 0", a)
+	}
+	if a := testing.AllocsPerRun(20, func() { StepGridDays(y, days, 1) }); a != 1+3*7 {
+		t.Errorf("StepGridDays, 1 worker: %v allocations, want %d", a, 1+3*7)
+	}
+}
