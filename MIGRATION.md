@@ -12,6 +12,44 @@ means the Go function exists **and** a test asserts it; "Ported ✅" additionall
 means a `TestCFFDRS*` asserts it against the fixture, which is the only status
 that says the coefficients are *right* rather than merely self-consistent.
 
+## Where it stands
+
+As of 2026-10-25, **everything in scope is ported**: no row is 🔴, and the
+dependency order below says "Nothing is owed." That is not the same as
+everything in cffdrs being ported.
+
+- **✅ 26 rows** — the whole FBP System (every fuel, the crown fire,
+  acceleration, the `fbp()` driver), the daily FWI System, and both grid
+  wrappers, each asserted against the pinned oracle.
+- **🟢 2 rows** — ported, but with no correct oracle to assert against: the rate
+  at a bearing (cffdrs' own two versions are numerically wrong, so `ROSAtAngle` is
+  held to the published equation instead) and `AngleBetweenDeg` (nothing upstream
+  computes it).
+- **⚪ 5 rows** — out of scope by the maintainer's decision: the grass and hourly
+  moisture codes and their grid wrappers, the fire season and overwintered drought
+  code, `lros`/`pros`, and the package metadata file.
+- **🟡 2 rows that hold no code** — upstream's `tests/` and `data/`. Whether they
+  become ⚪ is a status call for a human.
+
+### Known gaps inside ✅ rows
+
+These are not rows of their own, so the status counts above do not show them.
+Each is written up in full in the row named.
+
+- **C6 on a slope.** `Predict` (and so `PredictGrid`) refuses it with
+  `ErrC6OnSlope` rather than give a different answer from cffdrs, whose slope
+  back-solve for C6 inverts the crown-blended rate. See `Slopecalc.r`.
+- **D2.** Neither cffdrs nor this package has coefficients for it, so it is
+  refused as an unknown fuel rather than reported as a rate of zero. See
+  `CanonicalFuelCode` and the README's Fuel codes section.
+- **The bearing-based outputs.** `fbp()`'s TROS and the five built on it (TROSt,
+  TCFB, TFI, TTFC, TTI) are not produced, because TROS mixes radians and degrees.
+  `ROSAtAngle` is the rate at a bearing here. See `rate_of_spread_at_theta.r`
+  and `fire_behaviour_prediction.r`.
+- **`fbp()`'s ISI override and BUIEFF switch.** Not supported: `Predict` always
+  computes ISI from FFMC and the net effective wind, and always applies the
+  buildup effect. See `fire_behaviour_prediction.r`.
+
 ## Pins
 
 | | value | checked |
