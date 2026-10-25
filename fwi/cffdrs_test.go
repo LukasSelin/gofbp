@@ -658,3 +658,150 @@ func TestCFFDRSSampleDataset(t *testing.T) {
 		ws[n].done(48)
 	}
 }
+
+// gridCell is a "grid" row of fwi_cases read with every column a pointer.
+// fwiCase cannot carry these rows: its inputs are plain floats, and the grid-na
+// block puts null in an input on purpose. On a grid row every column is
+// emitted, so nil here means NA and never "not emitted".
+type gridCell struct {
+	Kind  string `json:"kind"`
+	Chain string `json:"chain"`
+	Day   int    `json:"day"`
+	Mon   int    `json:"mon"`
+
+	Lat, Temp, RH, WS, Prec      *float64
+	FFMCYda                      *float64 `json:"ffmc_yda"`
+	DMCYda                       *float64 `json:"dmc_yda"`
+	DCYda                        *float64 `json:"dc_yda"`
+	FFMC, DMC, DC, ISI, BUI, FWI *float64
+	DSR                          *float64
+}
+
+var (
+	gridOnce  sync.Once
+	gridCells map[string][]gridCell
+	gridErr   error
+)
+
+// loadGrids returns the grid rows by grid, each in cell order. It leans on
+// loadFWI for the skip, the stale-fixture failure and the provenance log.
+func loadGrids(t *testing.T) map[string][]gridCell {
+	t.Helper()
+	loadFWI(t)
+	gridOnce.Do(func() {
+		raw, err := os.ReadFile(fixturePath)
+		if err != nil {
+			gridErr = err
+			return
+		}
+		var fx struct {
+			FWICases []gridCell `json:"fwi_cases"`
+		}
+		if gridErr = json.Unmarshal(raw, &fx); gridErr != nil {
+			return
+		}
+		gridCells = map[string][]gridCell{}
+		for _, c := range fx.FWICases {
+			if c.Kind == "grid" {
+				gridCells[c.Chain] = append(gridCells[c.Chain], c)
+			}
+		}
+		for _, cells := range gridCells {
+			sort.Slice(cells, func(i, j int) bool { return cells[i].Day < cells[j].Day })
+		}
+	})
+	if gridErr != nil {
+		t.Fatalf("read fixture grids: %v", gridErr)
+	}
+	return gridCells
+}
+
+func orNaN(p *float64) float64 {
+	if p == nil {
+		return math.NaN()
+	}
+	return *p
+}
+
+// TestCFFDRSStepGrid asserts StepGrid against fwiRaster() over small terra
+// grids, cell for cell, in terra's cell order. The grids are the one-day
+// weather set over every band edge of both day-length tables in four months;
+// the one-day states as per-cell init layers; fwiRaster()'s own defaults (no
+// lat layer, no mon, no init), handed to StepGrid as the 55 °N, July and
+// 85/6/15 they stand for; and one NA in each input layer in turn. An NA output
+// is asserted as NaN, so a Go that poisoned the whole cell the way Step does
+// fails here.
+//
+// ledger: fwiRaster.r
+func TestCFFDRSStepGrid(t *testing.T) {
+	grids := loadGrids(t)
+	ws, names := sevenWorst(t)
+	na := 0
+	ids := make([]string, 0, len(grids))
+	for id := range grids {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		cells := grids[id]
+		n := len(cells)
+		w := Grid{make([]float64, n), make([]float64, n), make([]float64, n), make([]float64, n), make([]float64, n)}
+		y := GridState{make([]float64, n), make([]float64, n), make([]float64, n)}
+		uniform := true
+		for i, c := range cells {
+			if c.Day != i+1 || c.Mon != cells[0].Mon {
+				t.Fatalf("%s: cell %d is day %d, month %d — the grid is not contiguous in one month", id, i, c.Day, c.Mon)
+			}
+			w.TempC[i], w.RHPct[i], w.WindKmh[i], w.PrecipMm[i], w.LatDeg[i] =
+				orNaN(c.Temp), orNaN(c.RH), orNaN(c.WS), orNaN(c.Prec), orNaN(c.Lat)
+			y.FFMC[i], y.DMC[i], y.DC[i] = orNaN(c.FFMCYda), orNaN(c.DMCYda), orNaN(c.DCYda)
+			if y.FFMC[i] != y.FFMC[0] || y.DMC[i] != y.DMC[0] || y.DC[i] != y.DC[0] {
+				uniform = false
+			}
+		}
+		// A grid that was given one init triple is handed one, the way a caller
+		// would build it.
+		if uniform {
+			y = UniformGridState(State{y.FFMC[0], y.DMC[0], y.DC[0]}, n)
+			ws["FFMC"].branch("numeric init")
+		} else {
+			ws["FFMC"].branch("per-cell init layers")
+		}
+		got, err := StepGrid(y, w, cells[0].Mon)
+		if err != nil {
+			t.Fatalf("%s: %v", id, err)
+		}
+		for i, c := range cells {
+			wants := []*float64{c.FFMC, c.DMC, c.DC, c.ISI, c.BUI, c.FWI, c.DSR}
+			gots := []float64{got.FFMC[i], got.DMC[i], got.DC[i], got.ISI[i], got.BUI[i], got.FWI[i], got.DSR[i]}
+			for k, name := range names {
+				if wants[k] == nil {
+					na++
+					if !math.IsNaN(gots[k]) {
+						t.Errorf("%s cell %d: %s = %.17g, cffdrs = NA", id, i+1, name, gots[k])
+					}
+					continue
+				}
+				if math.IsNaN(gots[k]) {
+					t.Errorf("%s cell %d: %s = NaN, cffdrs = %.17g — an NA spread further than fwiRaster() lets it", id, i+1, name, *wants[k])
+					continue
+				}
+				ws[name].check(gots[k], wants[k], "(%s cell %d)", id, i+1)
+			}
+			if c.RH != nil && *c.RH >= 100 {
+				ws["FFMC"].branch("RH >= 100, clamped")
+			}
+		}
+	}
+	t.Logf("%d grids, %d NA outputs asserted as NaN", len(ids), na)
+	if na == 0 {
+		t.Error("no NA output was asserted: the grid-na block is missing from the fixture")
+	}
+	for i, n := range names {
+		if i == 0 {
+			ws[n].done(2000, "numeric init", "per-cell init layers", "RH >= 100, clamped")
+			continue
+		}
+		ws[n].done(2000)
+	}
+}

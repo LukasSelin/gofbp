@@ -959,6 +959,97 @@ fadd(data.frame(kind = "test_fwi", chain = "test_fwi", day = seq_len(n_tf),
                 ffmc = o$FFMC, dmc = o$DMC, dc = o$DC, isi = o$ISI,
                 bui = o$BUI, fwi = o$FWI, dsr = o$DSR, stringsAsFactors = FALSE))
 
+# --- fwiRaster() ---
+# fwiRaster() is fwi()'s one-day step over a terra grid: every cell is
+# fine_fuel_moisture_code ... fire_weather_index through lapp(), after the same
+# RH >= 100 -> 99.9999 clamp, with DSR as 0.0272 * FWI^1.77. Go's StepGrid
+# claims to be that, cell for cell. Each grid below is its own "chain" and each
+# cell its own "day", numbered in terra's cell order (row-major), so the Go side
+# reads the cells back in the order it would lay out a slice.
+#
+#   grid-weather-mMM  the one-day weather set over every band edge of both day-
+#                     length tables, one grid per month (mon is a scalar here,
+#                     not a layer); numeric init 85/6/15 passed explicitly
+#   grid-states       the one-day states as per-cell init layers, which is how
+#                     a caller chains days through fwiRaster()
+#   grid-defaults     no lat layer, no mon, no init: fwiRaster()'s own 55 N,
+#                     July and 85/6/15. Recorded as those values, which is what
+#                     the Go side has to be handed, since it has no defaults.
+#   grid-na           one NA in each input layer in turn, init layers included.
+#                     An NA cell does not poison the cell: each output is NA
+#                     only if an input it reads is, so a missing wind still has
+#                     a DMC, a DC and a BUI. This is the one block that emits NA
+#                     at all, as null -- every column of a grid row is present,
+#                     so on these rows null means NA and never "not emitted".
+#
+# fwiRaster() stop()s on any negative prec, ws or rh cell; that is checked here
+# rather than recorded, since there is no output to record.
+grid_layer <- function(v, nr) {
+  r <- terra::rast(matrix(as.numeric(v), nrow = nr, byrow = TRUE))
+  if (!identical(as.numeric(terra::values(r)[, 1]), as.numeric(v))) stop("grid_layer: cell order")
+  r
+}
+run_grid <- function(id, w, nr, mon = NULL, init = "default", lat_layer = TRUE) {
+  rownames(w) <- NULL
+  n <- nrow(w)
+  input <- c(grid_layer(w$temp, nr), grid_layer(w$rh, nr),
+             grid_layer(w$ws, nr), grid_layer(w$prec, nr))
+  names(input) <- c("temp", "rh", "ws", "prec")
+  if (lat_layer) input[["lat"]] <- grid_layer(w$lat, nr)
+  args <- list(input, out = "fwi")
+  if (!is.null(mon)) args$mon <- mon
+  if (identical(init, "cells")) {
+    il <- c(grid_layer(w$ffmc_yda, nr), grid_layer(w$dmc_yda, nr), grid_layer(w$dc_yda, nr))
+    names(il) <- c("ffmc", "dmc", "dc")
+    args$init <- il
+  } else if (is.numeric(init)) {
+    args$init <- init
+  }
+  o <- do.call(fwiRaster, args)
+  v <- terra::values(o)
+  if (!identical(colnames(v), c("FFMC", "DMC", "DC", "ISI", "BUI", "FWI", "DSR")))
+    stop("fwiRaster() returned layers ", paste(colnames(v), collapse = ","))
+  if (nrow(v) != n) stop("fwiRaster() returned ", nrow(v), " cells for ", n)
+  start <- if (is.numeric(init)) unname(init) else c(85, 6, 15)
+  g <- data.frame(kind = "grid", chain = id, day = seq_len(n), lat_adjust = TRUE,
+                  mon = if (is.null(mon)) 7 else mon,
+                  lat = if (lat_layer) w$lat else 55,
+                  temp = w$temp, rh = w$rh, ws = w$ws, prec = w$prec,
+                  ffmc_yda = if (identical(init, "cells")) w$ffmc_yda else start[1],
+                  dmc_yda = if (identical(init, "cells")) w$dmc_yda else start[2],
+                  dc_yda = if (identical(init, "cells")) w$dc_yda else start[3],
+                  ffmc = v[, "FFMC"], dmc = v[, "DMC"], dc = v[, "DC"], isi = v[, "ISI"],
+                  bui = v[, "BUI"], fwi = v[, "FWI"], dsr = v[, "DSR"],
+                  stringsAsFactors = FALSE)
+  for (col in names(g)) if (is.double(g[[col]])) g[[col]][is.na(g[[col]])] <- NaN
+  fadd(g)
+}
+
+GRID_LATS <- sort(unique(c(DMC_LATS, DC_LATS)))
+gw <- merge(FWI_DAY_WEATHER, data.frame(lat = GRID_LATS), sort = FALSE)
+gw <- gw[order(match(gw$lat, GRID_LATS), seq_len(nrow(gw))), ]
+for (m in c(1, 4, 7, 10)) {
+  run_grid(sprintf("grid-weather-m%02d", m), gw, nr = length(GRID_LATS),
+           mon = m, init = c(ffmc = 85, dmc = 6, dc = 15))
+}
+gs <- merge(merge(FWI_DAY_WEATHER, FWI_DAY_STATES), data.frame(lat = c(-35, 15, 55, 69)))
+run_grid("grid-states", gs, nr = 4, mon = 4, init = "cells")
+run_grid("grid-defaults", FWI_DAY_WEATHER, nr = 1, lat_layer = FALSE)
+
+base <- data.frame(temp = 20, rh = 40, ws = 15, prec = 2, lat = 55,
+                   ffmc_yda = 85, dmc_yda = 6, dc_yda = 15)
+gn <- base[rep(1, 9), ]
+for (i in seq_along(names(base))) gn[i + 1, names(base)[i]] <- NA
+run_grid("grid-na", gn, nr = 1, mon = 7, init = "cells")
+
+for (lay in c("prec", "ws", "rh")) {
+  bad <- base[rep(1, 3), ]
+  bad[2, lay] <- -0.1
+  msg <- tryCatch({ run_grid("never", bad, nr = 1); NULL }, error = conditionMessage)
+  if (is.null(msg) || !grepl("cannot be negative", msg))
+    stop("fwiRaster() did not refuse a negative ", lay, " cell")
+}
+
 FW <- do.call(rbind, fwi_rows)
 # Every row must have produced the output its kind is about. A non-finite one is
 # not skipped -- it is emitted as null and the Go side fails on it -- but it is
