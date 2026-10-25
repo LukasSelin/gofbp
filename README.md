@@ -7,33 +7,41 @@
 The Canadian Forest Fire Behaviour Prediction (FBP) System's head-fire rate of
 spread, in Go — and, in a package of its own beside it, the daily Canadian Fire
 Weather Index (FWI) System that produces FBP's inputs. Zero dependencies — each
-package imports `math` and nothing else, not even the other. Both checked against
-`cffdrs`, the Canadian Forest Service's own R implementation.
+package imports `math` and the module's own packages below it, nothing else, and
+FBP and FWI never import each other. Both checked against `cffdrs`, the Canadian
+Forest Service's own R implementation.
 
 ```
 go get github.com/LukasSelin/gofbp
 ```
 
-The module is `gofbp` and holds two packages:
+The module is `gofbp`. The FBP System is five packages — the four that hold its
+equations, and `fbp`, which composes them — and the FWI System is one:
 
 | Import | Package | What it is |
 |---|---|---|
-| `github.com/LukasSelin/gofbp` | `fbp` | the FBP System: rate of spread and fire behaviour |
+| `github.com/LukasSelin/gofbp` | `fbp` | the FBP driver: `Predict` for one stand, `PredictGrid` over a grid |
+| `github.com/LukasSelin/gofbp/fuel` | `fuel` | the fuel types: the coefficient table and `CanonicalFuelCode` |
+| `github.com/LukasSelin/gofbp/spread` | `spread` | rate of spread: RSI, BE, SF, ISI, the slope back-solve, ROS, the fire ellipse, acceleration |
+| `github.com/LukasSelin/gofbp/crown` | `crown` | the crown-fire threshold (CSI, RSO, CFB, FD), C6, foliar moisture, CBH/CFL tables |
+| `github.com/LukasSelin/gofbp/consumption` | `consumption` | surface, crown and total fuel consumption, and fire intensity |
 | `github.com/LukasSelin/gofbp/fwi` | `fwi` | the FWI System: FFMC, DMC, DC, ISI, BUI, FWI, DSR from daily weather |
 
-`import "github.com/LukasSelin/gofbp"` binds the identifier `fbp`, and no alias
-is needed. Most of this README is about `fbp`; see
-[The FWI System: package `fwi`](#the-fwi-system-package-fwi) for the other one.
+`fuel` is at the bottom; `spread`, `crown` and `consumption` each import only
+`fuel`; `fbp` imports all four. `import "github.com/LukasSelin/gofbp"` binds the
+identifier `fbp`, and no alias is needed. Most of this README is about the FBP
+packages; see [The FWI System: package `fwi`](#the-fwi-system-package-fwi) for
+the other one.
 
 ## What this is
 
-Package `fbp` is the FBP System as published: ST-X-3's equations and coefficient
-tables, plus the revisions the Canadian Forest Service published in 2009 (the
-grass curing function, and the M3/M4 dead-balsam-fir mixedwoods) — with no local
-adaptation, no defaults chosen for a particular country, and no judgement about
-what the ground is made of. That constraint is the point — the claim "this is
-the Canadian FBP System, unmodified" is only checkable if the package making it
-contains nothing else. So the FWI System is not in it: FBP takes FFMC and BUI
+The FBP packages are the FBP System as published: ST-X-3's equations and
+coefficient tables, plus the revisions the Canadian Forest Service published in
+2009 (the grass curing function, and the M3/M4 dead-balsam-fir mixedwoods) —
+with no local adaptation, no defaults chosen for a particular country, and no
+judgement about what the ground is made of. That constraint is the point — the
+claim "this is the Canadian FBP System, unmodified" is only checkable if the
+packages making it contain nothing else. So the FWI System is not in them: FBP takes FFMC and BUI
 as given, and package `fwi` is where they can come from.
 
 What it produces is a **rate of spread in metres per minute**: a physical
@@ -80,10 +88,10 @@ wrong **direction**. Do not rely on that cancellation.
 ## Usage
 
 ```go
-s := fbp.SlopeWind{
+s := spread.SlopeWind{
 	Code:              "C2",
 	FFMC:              92,
-	SlopePct:          fbp.SlopePercentFromDegrees(20), // percent rise, not degrees
+	SlopePct:          spread.SlopePercentFromDegrees(20), // percent rise, not degrees
 	WindKmh:           15,                              // km/h, not m/s
 	WindAzimuthDeg:    45,                              // the wind pushes towards NE
 	UpslopeAzimuthDeg: 45,                              // the ground rises towards NE
@@ -95,17 +103,17 @@ const bui = 80
 
 // Slope is not a multiplier. It is back-solved into an equivalent wind and
 // vector-added to the real one.
-wsv, raz := fbp.NetEffectiveWind(s)
+wsv, raz := spread.NetEffectiveWind(s)
 
 // The head rate. slopePct is 0 on purpose: the slope is already inside wsv.
-isi := fbp.ISI(s.FFMC, wsv)
-head := fbp.ROS(s.Code, isi, bui, s.PC, s.PDF, s.CuringPct, 0)
+isi := spread.ISI(s.FFMC, wsv)
+head := spread.ROS(s.Code, isi, bui, s.PC, s.PDF, s.CuringPct, 0)
 
 // The ellipse, for "how fast is this coming at something due east of me".
-back := fbp.ROS(s.Code, isi*fbp.BackISIRatio(wsv), bui, s.PC, s.PDF, s.CuringPct, 0)
-lb := fbp.LengthToBreadth(s.Code, wsv)
-flank := fbp.FlankROS(head, back, lb)
-east := fbp.ROSAtAngle(head, flank, back, fbp.AngleBetweenDeg(raz, 90))
+back := spread.ROS(s.Code, isi*spread.BackISIRatio(wsv), bui, s.PC, s.PDF, s.CuringPct, 0)
+lb := spread.LengthToBreadth(s.Code, wsv)
+flank := spread.FlankROS(head, back, lb)
+east := spread.ROSAtAngle(head, flank, back, spread.AngleBetweenDeg(raz, 90))
 ```
 
 ```
@@ -118,7 +126,7 @@ east:  4.65 m/min
 
 That spread — 45 m/min at the head against 0.71 at the back — is why the head
 rate alone is the wrong number for "how fast is this coming at *me*". See
-`example_test.go`, which is this program and is run by the test suite.
+`spread/example_test.go`, which is this program and is run by the test suite.
 
 ## The driver: `Predict`
 
@@ -195,9 +203,9 @@ independent, so split the slices across goroutines if you want parallelism.
   `C6StandCrownBaseHeight`. `Crown` calls none of them:
 
   ```go
-  cbh, _ := fbp.DefaultCrownBaseHeight("C3") // 8 m
-  cfl, _ := fbp.DefaultCrownFuelLoad("C3")   // 1.15 kg/m²
-  cfb := fbp.CrownFractionBurned(fbp.Crown{FMC: fmc, SFC: sfc, CBH: cbh, CFL: cfl, SurfaceROS: rss})
+  cbh, _ := crown.DefaultCrownBaseHeight("C3") // 8 m
+  cfl, _ := crown.DefaultCrownFuelLoad("C3")   // 1.15 kg/m²
+  cfb := crown.CrownFractionBurned(crown.Crown{FMC: fmc, SFC: sfc, CBH: cbh, CFL: cfl, SurfaceROS: rss})
   ```
 - The acceleration model for a point ignition: `AccelerationAlpha` (eq. 72),
   `ROSAtTime` (eq. 70), `DistanceAtTime` (eq. 71) and `LengthToBreadthAtTime`
@@ -249,10 +257,10 @@ for _, day := range days {
 }
 ```
 
-`fwi.ISI` is **not** `fbp.ISI`. They share a name and a source file
+`fwi.ISI` is **not** `spread.ISI`. They share a name and a source file
 (`initial_spread_index.r`), but the FWI System's uses `exp(0.05039·wind)` at every
 wind speed where FBP's switches to a saturating high-wind function at 40 km/h —
-at 60 km/h the FWI System's is about 1.85 times FBP's. Feed FBP `fbp.ISI`.
+at 60 km/h the FWI System's is about 1.85 times FBP's. Feed FBP `spread.ISI`.
 
 **Units** are cffdrs', and not the ones weather data usually arrives in:
 
@@ -329,7 +337,7 @@ rate of **0** — which is exactly what a cell that will not carry fire returns.
 `CanonicalFuelCode` is the only thing that tells the two apart:
 
 ```go
-code, ok := fbp.CanonicalFuelCode(rasterClass)
+code, ok := fuel.CanonicalFuelCode(rasterClass)
 if !ok {
 	// A typo, a non-FBP class name, or D2. Decide here — not downstream,
 	// where it is a zero with no reason attached.
@@ -368,14 +376,14 @@ replaced by a published average; for the other two: one would have to invent a g
 date.
 
 ```go
-fmc := fbp.FoliarMoistureContent(55, 120 /* °W */, 0 /* elev */, 200 /* day */, 0)
-sfc := fbp.SurfaceFuelConsumption("C2", ffmc, bui, 0 /* pc */, 0 /* gfl */)
+fmc := crown.FoliarMoistureContent(55, 120 /* °W */, 0 /* elev */, 200 /* day */, 0)
+sfc := consumption.SurfaceFuelConsumption("C2", ffmc, bui, 0 /* pc */, 0 /* gfl */)
 
-cfb := fbp.CrownFractionBurned(fbp.Crown{
+cfb := crown.CrownFractionBurned(crown.Crown{
     FMC: fmc, SFC: sfc, CBH: 3, CFL: 0.8,
     SurfaceROS: surfaceROS, // RSI·BE on the net effective wind — NOT RSI·BE·SF
 })
-fd := fbp.DescribeFire(cfb) // "S", "I" or "C"
+fd := crown.DescribeFire(cfb) // "S", "I" or "C"
 ```
 
 `SurfaceROS` must be the surface rate from the full slope path, not `ROS`'s
@@ -393,14 +401,14 @@ and `C6CrownFire` is how you get it here.
 ```go
 // RSS, the surface rate, assembled the ordinary way. Eqs. 62 and 63 are just the
 // generic curve at C6's table row, so RSI and BuildupEffect already cover them.
-isi := fbp.ISI(ffmc, windKmh)
-rss := fbp.RSI("C6", isi, 0, 0, 0) * fbp.BuildupEffect("C6", bui)
+isi := spread.ISI(ffmc, windKmh)
+rss := spread.RSI("C6", isi, 0, 0, 0) * spread.BuildupEffect("C6", bui)
 
-ros, cfb := fbp.C6CrownFire(fbp.Crown{
+ros, cfb := crown.C6CrownFire(crown.Crown{
     FMC: fmc, SFC: sfc, CBH: 7, CFL: 0.8,
     SurfaceROS: rss,
 }, isi)
-fd := fbp.DescribeFire(cfb)
+fd := crown.DescribeFire(cfb)
 ```
 
 Three things about it are easy to get the wrong way round:

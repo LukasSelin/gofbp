@@ -1,6 +1,14 @@
 package fbp
 
-import "math"
+import (
+	"math"
+
+	"github.com/LukasSelin/gofbp/consumption"
+	"github.com/LukasSelin/gofbp/crown"
+	"github.com/LukasSelin/gofbp/fuel"
+	"github.com/LukasSelin/gofbp/internal/bearing"
+	"github.com/LukasSelin/gofbp/spread"
+)
 
 // THE DRIVER: one call that composes every piece of this package the way
 // cffdrs' fbp() composes them, for one stand under one set of conditions.
@@ -126,7 +134,7 @@ type Prediction struct {
 
 	// The head fire.
 	ROS, CFB, CFC, TFC, HFI float64
-	FD                      FireDescription
+	FD                      crown.FireDescription
 	CSI, RSO                float64
 
 	// The ellipse at equilibrium, with the flank and back fires' own crowning.
@@ -198,7 +206,7 @@ func crownless(canonical string) bool {
 // comment, and Input for what each field means.
 func Predict(in Input) (Prediction, error) {
 	var p Prediction
-	fuel, ok := CanonicalFuelCode(in.Fuel)
+	fuelCode, ok := fuel.CanonicalFuelCode(in.Fuel)
 	if !ok {
 		return p, &PredictError{kind: ErrUnknownFuel.kind, detail: `"` + in.Fuel + `"`}
 	}
@@ -226,10 +234,10 @@ func Predict(in Input) (Prediction, error) {
 	case !finiteIn(in.ElapsedMin, 0, math.MaxFloat64):
 		return p, invalid("ElapsedMin")
 	}
-	if fuel == "C6" && in.SlopePct > 0 {
+	if fuelCode == "C6" && in.SlopePct > 0 {
 		return p, ErrC6OnSlope
 	}
-	grass := fuel == "O1A" || fuel == "O1B"
+	grass := fuelCode == "O1A" || fuelCode == "O1B"
 	if grass && !finiteIn(in.GrassFuelLoad, math.SmallestNonzeroFloat64, math.MaxFloat64) {
 		return p, ErrNoGrassLoad
 	}
@@ -245,21 +253,21 @@ func Predict(in Input) (Prediction, error) {
 		}
 		p.CBH, p.CFL = in.CBH, in.CFL
 	case CrownCFFDRS:
-		p.CBH = CrownBaseHeight(fuel, in.CBH, in.StandDensity, in.StandHeight)
-		p.CFL = CrownFuelLoad(fuel, in.CFL)
+		p.CBH = crown.CrownBaseHeight(fuelCode, in.CBH, in.StandDensity, in.StandHeight)
+		p.CFL = crown.CrownFuelLoad(fuelCode, in.CFL)
 	default:
 		return p, ErrCrownUnset
 	}
 
 	// Foliar moisture: the caller's, or their site's; zero for the crownless.
 	switch {
-	case crownless(fuel):
+	case crownless(fuelCode):
 		p.FMC = 0
 	case in.FMC > 0 && in.FMC <= 120:
 		p.FMC = in.FMC
 	case in.Site != nil:
 		s := in.Site
-		p.FMC = FoliarMoistureContent(s.Lat, math.Abs(s.Long), s.ElevM, s.DayOfYear, s.D0)
+		p.FMC = crown.FoliarMoistureContent(s.Lat, math.Abs(s.Long), s.ElevM, s.DayOfYear, s.D0)
 		if !(p.FMC > 0) {
 			return p, ErrNoFMC
 		}
@@ -267,27 +275,27 @@ func Predict(in Input) (Prediction, error) {
 		return p, ErrNoFMC
 	}
 
-	p.SFC = SurfaceFuelConsumption(fuel, in.FFMC, in.BUI, in.PC, in.GrassFuelLoad)
+	p.SFC = consumption.SurfaceFuelConsumption(fuelCode, in.FFMC, in.BUI, in.PC, in.GrassFuelLoad)
 
 	// Net effective wind. fbp() runs the back-solve only on a slope with a
 	// positive FFMC, and otherwise takes the wind as it is — so does this.
 	p.WSV, p.RAZ = in.WindKmh, in.WindAzimuthDeg
 	if in.SlopePct > 0 && in.FFMC > 0 {
-		p.WSV, p.RAZ = NetEffectiveWind(SlopeWind{
-			Code: fuel, FFMC: in.FFMC, SlopePct: in.SlopePct,
+		p.WSV, p.RAZ = spread.NetEffectiveWind(spread.SlopeWind{
+			Code: fuelCode, FFMC: in.FFMC, SlopePct: in.SlopePct,
 			WindKmh: in.WindKmh, WindAzimuthDeg: in.WindAzimuthDeg,
 			UpslopeAzimuthDeg: in.UpslopeAzimuthDeg,
 			PC:                in.PC, PDF: in.PDF, CuringPct: in.CuringPct,
 		})
 	}
-	p.RAZ = normalizeDeg(p.RAZ)
-	p.ISI = ISI(in.FFMC, p.WSV)
-	p.BE = BuildupEffect(fuel, in.BUI)
-	p.SF = SlopeFactor(in.SlopePct)
+	p.RAZ = bearing.Normalize(p.RAZ)
+	p.ISI = spread.ISI(in.FFMC, p.WSV)
+	p.BE = spread.BuildupEffect(fuelCode, in.BUI)
+	p.SF = spread.SlopeFactor(in.SlopePct)
 
 	// The head fire: RSS with the slope inside WSV, then C6's blend or the
 	// threshold for everyone else.
-	crown := Crown{FMC: p.FMC, SFC: p.SFC, CBH: p.CBH, CFL: p.CFL}
+	stand := crown.Crown{FMC: p.FMC, SFC: p.SFC, CBH: p.CBH, CFL: p.CFL}
 	// CSI and RSO are reported as fbp() reports them, which differs from
 	// CriticalSurfaceIntensity at exactly one point: a CBH of exactly 0, the
 	// published value for the six crownless fuels. fbp() evaluates eq. 56 there
@@ -297,48 +305,48 @@ func Predict(in Input) (Prediction, error) {
 	// damp conditions, and there it turns 1e-13 m/min into a TI of minutes. The
 	// crown fraction is unaffected either way: CFL is 0 for every one of those
 	// fuels under the published table, and the CFL gate holds CFB at 0.
-	p.CSI = CriticalSurfaceIntensity(p.FMC, p.CBH)
+	p.CSI = crown.CriticalSurfaceIntensity(p.FMC, p.CBH)
 	if p.CBH == 0 {
 		p.CSI = 0
 	}
-	p.RSO = CriticalSurfaceROS(p.CSI, p.SFC)
+	p.RSO = crown.CriticalSurfaceROS(p.CSI, p.SFC)
 	headRate := func(isi float64) (ros, cfb float64) {
-		c := crown
-		c.SurfaceROS = RSI(fuel, isi, in.PC, in.PDF, in.CuringPct) * p.BE
-		if fuel == "C6" {
-			return C6CrownFire(c, isi)
+		c := stand
+		c.SurfaceROS = spread.RSI(fuelCode, isi, in.PC, in.PDF, in.CuringPct) * p.BE
+		if fuelCode == "C6" {
+			return crown.C6CrownFire(c, isi)
 		}
-		return c.SurfaceROS, CrownFractionBurned(c)
+		return c.SurfaceROS, crown.CrownFractionBurned(c)
 	}
 	p.ROS, p.CFB = headRate(p.ISI)
-	p.FD = DescribeFire(p.CFB)
-	p.CFC = CrownFuelConsumption(fuel, p.CFL, p.CFB, in.PC, in.PDF)
-	p.TFC = TotalFuelConsumption(fuel, p.CFL, p.CFB, p.SFC, in.PC, in.PDF)
-	p.HFI = FireIntensity(p.TFC, p.ROS)
+	p.FD = crown.DescribeFire(p.CFB)
+	p.CFC = consumption.CrownFuelConsumption(fuelCode, p.CFL, p.CFB, in.PC, in.PDF)
+	p.TFC = consumption.TotalFuelConsumption(fuelCode, p.CFL, p.CFB, p.SFC, in.PC, in.PDF)
+	p.HFI = consumption.FireIntensity(p.TFC, p.ROS)
 
 	// The ellipse. BROS is the same rate function at the backing ISI (eqs.
 	// 75-77) — C6's blend included, as in cffdrs' back_rate_of_spread.
-	p.LB = LengthToBreadth(fuel, p.WSV)
-	p.BROS, _ = headRate(p.ISI * BackISIRatio(p.WSV))
-	p.FROS = FlankROS(p.ROS, p.BROS, p.LB)
+	p.LB = spread.LengthToBreadth(fuelCode, p.WSV)
+	p.BROS, _ = headRate(p.ISI * spread.BackISIRatio(p.WSV))
+	p.FROS = spread.FlankROS(p.ROS, p.BROS, p.LB)
 
 	// The flank and back fires' own crowning: eq. 58 at their own rates against
 	// the head's RSO. fbp() sets both to 0 for C6 rather than running C6's path
 	// at those rates; that is reproduced, and is why C6's FFI/BFI carry no crown
 	// fuel.
 	sideCFB := func(ros float64) float64 {
-		if !(p.CFL > 0) || fuel == "C6" {
+		if !(p.CFL > 0) || fuelCode == "C6" {
 			return 0
 		}
-		c := crown
+		c := stand
 		c.SurfaceROS = ros
-		return CrownFractionBurned(c)
+		return crown.CrownFractionBurned(c)
 	}
 	p.FCFB, p.BCFB = sideCFB(p.FROS), sideCFB(p.BROS)
-	p.FTFC = TotalFuelConsumption(fuel, p.CFL, p.FCFB, p.SFC, in.PC, in.PDF)
-	p.BTFC = TotalFuelConsumption(fuel, p.CFL, p.BCFB, p.SFC, in.PC, in.PDF)
-	p.FFI = FireIntensity(p.FTFC, p.FROS)
-	p.BFI = FireIntensity(p.BTFC, p.BROS)
+	p.FTFC = consumption.TotalFuelConsumption(fuelCode, p.CFL, p.FCFB, p.SFC, in.PC, in.PDF)
+	p.BTFC = consumption.TotalFuelConsumption(fuelCode, p.CFL, p.BCFB, p.SFC, in.PC, in.PDF)
+	p.FFI = consumption.FireIntensity(p.FTFC, p.FROS)
+	p.BFI = consumption.FireIntensity(p.BTFC, p.BROS)
 	p.TI = timeToCrowning(p.RSO, p.ROS, p.CFB)
 	p.FTI = timeToCrowning(p.RSO, p.FROS, p.FCFB)
 	p.BTI = timeToCrowning(p.RSO, p.BROS, p.BCFB)
@@ -346,12 +354,12 @@ func Predict(in Input) (Prediction, error) {
 	// Time.
 	t := in.ElapsedMin
 	if in.PointIgnition {
-		p.LBt = LengthToBreadthAtTime(fuel, p.LB, t, p.CFB)
-		p.HROSt = ROSAtTime(fuel, p.ROS, t, p.CFB)
-		p.BROSt = ROSAtTime(fuel, p.BROS, t, p.CFB)
-		p.FROSt = FlankROS(p.HROSt, p.BROSt, p.LBt)
-		p.DH = DistanceAtTime(fuel, p.ROS, t, p.CFB)
-		p.DB = DistanceAtTime(fuel, p.BROS, t, p.CFB)
+		p.LBt = spread.LengthToBreadthAtTime(fuelCode, p.LB, t, p.CFB)
+		p.HROSt = spread.ROSAtTime(fuelCode, p.ROS, t, p.CFB)
+		p.BROSt = spread.ROSAtTime(fuelCode, p.BROS, t, p.CFB)
+		p.FROSt = spread.FlankROS(p.HROSt, p.BROSt, p.LBt)
+		p.DH = spread.DistanceAtTime(fuelCode, p.ROS, t, p.CFB)
+		p.DB = spread.DistanceAtTime(fuelCode, p.BROS, t, p.CFB)
 		p.DF = (p.DH + p.DB) / (2 * p.LBt)
 	} else {
 		p.LBt, p.HROSt, p.BROSt, p.FROSt = p.LB, p.ROS, p.BROS, p.FROS
@@ -373,7 +381,7 @@ func Predict(in Input) (Prediction, error) {
 // a crowning C1 stand's TI is computed with a different α from the one its
 // ROSAtTime accelerates with. Reproduced, not corrected: TI is fbp()'s number.
 func timeToCrowning(rso, ros, cfb float64) float64 {
-	alpha := OpenFuelAcceleration - 18.8*math.Pow(cfb, 2.5)*math.Exp(-8*cfb)
+	alpha := spread.OpenFuelAcceleration - 18.8*math.Pow(cfb, 2.5)*math.Exp(-8*cfb)
 	x := 1 - rso/ros
 	if !(x > 0) {
 		x = 1

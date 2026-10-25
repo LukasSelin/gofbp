@@ -6,6 +6,9 @@ import (
 	"reflect"
 	"sync/atomic"
 	"testing"
+
+	"github.com/LukasSelin/gofbp/crown"
+	"github.com/LukasSelin/gofbp/fuel"
 )
 
 func TestFuelFromGridCode(t *testing.T) {
@@ -24,7 +27,7 @@ func TestFuelFromGridCode(t *testing.T) {
 	}
 	// Every code but the two non-fuels names a fuel this package implements.
 	for i, name := range GridFuelCodes {
-		_, ok := CanonicalFuelCode(name)
+		_, ok := fuel.CanonicalFuelCode(name)
 		if nonFuel := name == "NF" || name == "WA"; ok == nonFuel {
 			t.Errorf("code %d %q: implemented = %v", i+1, name, ok)
 		}
@@ -32,12 +35,12 @@ func TestFuelFromGridCode(t *testing.T) {
 }
 
 func TestFireDescriptionCode(t *testing.T) {
-	for d, want := range map[FireDescription]float64{SurfaceFire: 1, IntermittentCrown: 2, ContinuousCrown: 3} {
+	for d, want := range map[crown.FireDescription]float64{crown.SurfaceFire: 1, crown.IntermittentCrown: 2, crown.ContinuousCrown: 3} {
 		if got := d.Code(); got != want {
 			t.Errorf("%q.Code() = %v, want %v", d, got, want)
 		}
 	}
-	if got := FireDescription("").Code(); !math.IsNaN(got) {
+	if got := crown.FireDescription("").Code(); !math.IsNaN(got) {
 		t.Errorf(`"".Code() = %v, want NaN`, got)
 	}
 }
@@ -77,7 +80,7 @@ func TestPredictGridIsPredictPerCell(t *testing.T) {
 		t.Fatalf("got %d predictions and %d errors for %d cells", len(preds), len(errs), len(g.Fuel))
 	}
 	for i := range g.Fuel {
-		fuel, ok := FuelFromGridCode(g.Fuel[i])
+		fuelCode, ok := FuelFromGridCode(g.Fuel[i])
 		if !ok {
 			if !errors.Is(errs[i], ErrGridFuelCode) {
 				t.Errorf("cell %d: err = %v, want ErrGridFuelCode", i, errs[i])
@@ -85,7 +88,7 @@ func TestPredictGridIsPredictPerCell(t *testing.T) {
 			continue
 		}
 		want, wantErr := Predict(Input{
-			Fuel: fuel, FFMC: g.FFMC[i], BUI: g.BUI[i], WindKmh: g.WindKmh[i],
+			Fuel: fuelCode, FFMC: g.FFMC[i], BUI: g.BUI[i], WindKmh: g.WindKmh[i],
 			WindAzimuthDeg: g.WindAzimuthDeg[i], SlopePct: g.SlopePct[i],
 			UpslopeAzimuthDeg: g.UpslopeAzimuthDeg[i], PC: g.PC[i], PDF: g.PDF[i],
 			CuringPct: g.CuringPct[i], GrassFuelLoad: g.GrassFuelLoad[i],
@@ -93,11 +96,11 @@ func TestPredictGridIsPredictPerCell(t *testing.T) {
 			Crown: CrownCFFDRS, CBH: g.CBH[i], CFL: g.CFL[i],
 		})
 		if (wantErr == nil) != (errs[i] == nil) || (wantErr != nil && wantErr.Error() != errs[i].Error()) {
-			t.Errorf("cell %d %s: err = %v, Predict says %v", i, fuel, errs[i], wantErr)
+			t.Errorf("cell %d %s: err = %v, Predict says %v", i, fuelCode, errs[i], wantErr)
 			continue
 		}
 		if wantErr == nil && !reflect.DeepEqual(preds[i], want) {
-			t.Errorf("cell %d %s: PredictGrid differs from Predict:\n%+v\n%+v", i, fuel, preds[i], want)
+			t.Errorf("cell %d %s: PredictGrid differs from Predict:\n%+v\n%+v", i, fuelCode, preds[i], want)
 		}
 	}
 	for i, want := range map[int]error{1: ErrUnknownFuel, 3: ErrC6OnSlope, 5: ErrGridFuelCode, 7: ErrInvalidInput} {
@@ -284,7 +287,7 @@ func TestPredictGridWorkersIsBitIdentical(t *testing.T) {
 			}
 			checkSameAsSerial(t, tc.name+", PredictGrid", workers, got, errs, want, wantErrs)
 			for i := range bufOut {
-				bufOut[i], bufErrs[i] = Prediction{ROS: 7, FD: ContinuousCrown}, ErrGridFuelCode
+				bufOut[i], bufErrs[i] = Prediction{ROS: 7, FD: crown.ContinuousCrown}, ErrGridFuelCode
 			}
 			if err := PredictGridInto(bufOut, bufErrs, tc.g, opt); err != nil {
 				t.Fatalf("%s, %d workers: PredictGridInto: %v", tc.name, workers, err)

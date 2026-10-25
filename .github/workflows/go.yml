@@ -48,9 +48,11 @@ jobs:
     # Test files are out of scope. The fixture tests read testdata and shell out
     # to Docker, which is fine, and is not what a consumer links.
     #
-    # `.,./fwi` -- the two packages a consumer can import, fbp and fwi, and
-    # nothing else. fwi joined on 2026-09-24 under the same empty set: it is
-    # arithmetic on floats exactly as fbp is. A comma list, and checked to reach
+    # The packages a consumer can import -- fbp, the four FBP packages it
+    # composes (fuel, spread, crown, consumption), and fwi -- and nothing else.
+    # fwi joined on 2026-09-24 under the same empty set: it is arithmetic on
+    # floats exactly as fbp is. The four FBP packages were split out of fbp and
+    # are listed in their own right, because each is importable on its own. A comma list, and checked to reach
     # the second package: `.,./tools/precheck` fails this step as it should.
     #
     # Not `./...`, for the same reason test files are out. This was ./... when the module
@@ -66,4 +68,4 @@ jobs:
       run: |
         go install github.com/google/capslock/cmd/capslock@v0.3.3
         echo '{}' > "$RUNNER_TEMP/no-capabilities.json"
-        capslock -packages=.,./fwi -output=compare "$RUNNER_TEMP/no-capabilities.json"
+        capslock -packages=.,./fuel,./spread,./crown,./consumption,./fwi -output=compare "$RUNNER_TEMP/no-capabilities.json"

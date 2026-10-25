@@ -2,9 +2,11 @@ package fbp
 
 import (
 	"errors"
-	"math"
 	"sort"
 	"testing"
+
+	"github.com/LukasSelin/gofbp/fuel"
+	"github.com/LukasSelin/gofbp/internal/cffdrstest"
 )
 
 // The driver against the oracle: Predict, end to end, on every row of the
@@ -31,8 +33,8 @@ import (
 //
 // ledger: fire_behaviour_prediction.r
 func TestCFFDRSPredict(t *testing.T) {
-	f := loadCFFDRS(t)
-	reg := loadRegister(t)
+	f := cffdrstest.Load(t)
+	reg := cffdrstest.LoadRegister(t)
 	const tol = 1e-9
 
 	emitted := false
@@ -55,9 +57,9 @@ func TestCFFDRSPredict(t *testing.T) {
 	perFuel := map[string]int{}
 	refused, shown := 0, 0
 	for i, c := range f.Cases {
-		fuel := ourFuel(c.Fuel)
+		fuelCode := cffdrstest.Fuel(c.Fuel)
 		p, err := Predict(inputFromCase(c))
-		if d := reg.Find("cases", caseGetter(c), "*"); d != nil {
+		if d := reg.Find("cases", cffdrstest.CaseGetter(c), "*"); d != nil {
 			if want := sentinelErrors[d.Error]; !errors.Is(err, want) {
 				t.Errorf("case %d %s gs=%v: err = %v, want %v (divergence %s)", i, c.Fuel, c.GS, err, want, d.ID)
 			}
@@ -65,10 +67,10 @@ func TestCFFDRSPredict(t *testing.T) {
 			continue
 		}
 		if err != nil {
-			t.Errorf("case %d %s: %v, and no entry in %s explains the refusal", i, c.Fuel, err, registerPath)
+			t.Errorf("case %d %s: %v, and no entry in %s explains the refusal", i, c.Fuel, err, cffdrstest.RegisterPath)
 			continue
 		}
-		perFuel[fuel]++
+		perFuel[fuelCode]++
 		if string(p.FD) != c.FD {
 			if s := stats["fd"]; s == nil {
 				stats["fd"] = &stat{}
@@ -88,15 +90,15 @@ func TestCFFDRSPredict(t *testing.T) {
 			{"ti", p.TI, c.TI}, {"fti", p.FTI, c.FTI}, {"bti", p.BTI, c.BTI},
 			{"hrost", p.HROSt, c.HROSt}, {"brost", p.BROSt, c.BROSt}, {"frost", p.FROSt, c.FROSt},
 			{"lbt", p.LBt, c.LBt}, {"dh", p.DH, c.DH}, {"db", p.DB, c.DB}, {"df", p.DF, c.DF},
-			{"raz", angleDiff(p.RAZ, c.RAZ), 0},
+			{"raz", cffdrstest.AngleDiff(p.RAZ, c.RAZ), 0},
 		} {
 			s := stats[col.name]
 			if s == nil {
 				s = &stat{}
 				stats[col.name] = s
 			}
-			s.worst = maxF(s.worst, relErr(col.got, col.want))
-			if !closeEnough(col.got, col.want, tol) {
+			s.worst = cffdrstest.MaxF(s.worst, cffdrstest.RelErr(col.got, col.want))
+			if !cffdrstest.CloseEnough(col.got, col.want, tol) {
 				s.bad++
 				if shown++; shown <= 15 {
 					t.Errorf("case %d %s ffmc=%v ws=%v wd=%v gs=%v cbh=%v cfl=%v hr=%v accel=%v: %s = %v, cffdrs %v",
@@ -124,8 +126,8 @@ func TestCFFDRSPredict(t *testing.T) {
 		n += v
 	}
 	t.Logf("Predict %d rows end to end, %d refused as the register says, %d fuels", n, refused, len(perFuel))
-	if len(perFuel) < len(Fuels) {
-		t.Errorf("only %d of %d fuels reached", len(perFuel), len(Fuels))
+	if len(perFuel) < len(fuel.Fuels) {
+		t.Errorf("only %d of %d fuels reached", len(perFuel), len(fuel.Fuels))
 	}
 	if refused == 0 {
 		t.Error("no row the register covers was reached — its refusals are unasserted against the sweep")
@@ -135,22 +137,15 @@ func TestCFFDRSPredict(t *testing.T) {
 // inputFromCase is a fixture row as fbp() received it, translated once at the
 // boundary: wind and aspect are "from" in fbp() and "towards" here, and hours
 // are minutes.
-func inputFromCase(c cffdrsCase) Input {
+func inputFromCase(c cffdrstest.Case) Input {
 	return Input{
-		Fuel: ourFuel(c.Fuel), FFMC: c.FFMC, BUI: c.BUI,
+		Fuel: cffdrstest.Fuel(c.Fuel), FFMC: c.FFMC, BUI: c.BUI,
 		WindKmh: c.WS, WindAzimuthDeg: c.WD + 180,
 		SlopePct: c.GS, UpslopeAzimuthDeg: 0 + 180, // the fixture's Aspect is 0
 		PC: c.PC, PDF: c.PDF, CuringPct: c.CC,
-		GrassFuelLoad: sweepGrassFuelLoad,
+		GrassFuelLoad: cffdrstest.SweepGrassFuelLoad,
 		Site:          &Site{Lat: c.LAT, Long: c.LONG, ElevM: c.ELV, DayOfYear: c.DJ, D0: c.D0},
 		Crown:         CrownCFFDRS, CBH: c.CBH, CFL: c.CFL, StandDensity: c.SD, StandHeight: c.SH,
 		ElapsedMin: c.HR * 60, PointIgnition: c.Accel == 1,
 	}
-}
-
-// angleDiff is the unsigned separation of two azimuths, so 359.9 and 0.1 are
-// 0.2 apart rather than 359.8.
-func angleDiff(a, b float64) float64 {
-	d := math.Mod(math.Abs(a-b), 360)
-	return math.Min(d, 360-d)
 }

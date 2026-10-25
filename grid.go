@@ -1,6 +1,8 @@
 package fbp
 
-import "math"
+import (
+	"math"
+)
 
 // GridFuelCodes is fbpRaster()'s fuel-code table: code i+1 is GridFuelCodes[i].
 // It is cffdrs' sort() of the fuel names, which is why NF lands at 13 and WA at
@@ -25,21 +27,6 @@ func FuelFromGridCode(code float64) (string, bool) {
 // ErrGridFuelCode is PredictGrid's refusal of a cell whose fuel code is not one
 // of fbpRaster()'s 1-19.
 var ErrGridFuelCode = &PredictError{kind: "fuel code is not one of fbpRaster()'s 1-19"}
-
-// Code is FD as fbpRaster() writes it into a layer: 1 surface, 2 intermittent
-// crown, 3 continuous crown, and NaN for no description — a refused cell, or
-// what fbpRaster() writes as NA for NF and WA.
-func (d FireDescription) Code() float64 {
-	switch d {
-	case SurfaceFire:
-		return 1
-	case IntermittentCrown:
-		return 2
-	case ContinuousCrown:
-		return 3
-	}
-	return math.NaN()
-}
 
 // Grid is the FBP System's inputs over a grid of cells, as cffdrs' fbpRaster()
 // takes them: one slice per layer, cell i of every slice describing the same

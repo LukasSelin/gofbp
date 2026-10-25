@@ -4,6 +4,11 @@ import (
 	"errors"
 	"math"
 	"testing"
+
+	"github.com/LukasSelin/gofbp/consumption"
+	"github.com/LukasSelin/gofbp/crown"
+	"github.com/LukasSelin/gofbp/internal/cffdrstest"
+	"github.com/LukasSelin/gofbp/spread"
 )
 
 // The driver, without the fixture: every refusal it makes in place of a
@@ -36,11 +41,11 @@ func TestPredictMatchesACFFDRSWorkedPoint(t *testing.T) {
 		{"ROS", p.ROS, 34.62953830166129},
 		{"HFI", p.HFI, 27670.2513709067},
 	} {
-		if !closeEnough(c.got, c.want, tol) {
+		if !cffdrstest.CloseEnough(c.got, c.want, tol) {
 			t.Errorf("%s = %v, cffdrs %v", c.name, c.got, c.want)
 		}
 	}
-	if p.FD != IntermittentCrown {
+	if p.FD != crown.IntermittentCrown {
 		t.Errorf("FD = %q, want I", p.FD)
 	}
 	if p.RAZ != 180 {
@@ -62,25 +67,25 @@ func TestPredictIsTheComposition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sfc := SurfaceFuelConsumption("C2", 92, 40, 50, 0)
-	isi := ISI(92, 30)
-	rss := RSI("C2", isi, 50, 35, 80) * BuildupEffect("C2", 40)
-	cfb := CrownFractionBurned(Crown{FMC: 99.8176, SFC: sfc, CBH: 20, CFL: 1, SurfaceROS: rss})
-	bros := RSI("C2", isi*BackISIRatio(30), 50, 35, 80) * BuildupEffect("C2", 40)
-	lb := LengthToBreadth("C2", 30)
+	sfc := consumption.SurfaceFuelConsumption("C2", 92, 40, 50, 0)
+	isi := spread.ISI(92, 30)
+	rss := spread.RSI("C2", isi, 50, 35, 80) * spread.BuildupEffect("C2", 40)
+	cfb := crown.CrownFractionBurned(crown.Crown{FMC: 99.8176, SFC: sfc, CBH: 20, CFL: 1, SurfaceROS: rss})
+	bros := spread.RSI("C2", isi*spread.BackISIRatio(30), 50, 35, 80) * spread.BuildupEffect("C2", 40)
+	lb := spread.LengthToBreadth("C2", 30)
 	for _, c := range []struct {
 		name      string
 		got, want float64
 	}{
 		{"SFC", p.SFC, sfc}, {"ISI", p.ISI, isi}, {"ROS", p.ROS, rss}, {"CFB", p.CFB, cfb},
-		{"BROS", p.BROS, bros}, {"LB", p.LB, lb}, {"FROS", p.FROS, FlankROS(rss, bros, lb)},
-		{"HROSt", p.HROSt, ROSAtTime("C2", rss, 20, cfb)},
-		{"BROSt", p.BROSt, ROSAtTime("C2", bros, 20, cfb)}, // the HEAD cfb, as fbp() uses
-		{"LBt", p.LBt, LengthToBreadthAtTime("C2", lb, 20, cfb)},
-		{"DH", p.DH, DistanceAtTime("C2", rss, 20, cfb)},
-		{"HFI", p.HFI, FireIntensity(TotalFuelConsumption("C2", 1, cfb, sfc, 50, 35), rss)},
+		{"BROS", p.BROS, bros}, {"LB", p.LB, lb}, {"FROS", p.FROS, spread.FlankROS(rss, bros, lb)},
+		{"HROSt", p.HROSt, spread.ROSAtTime("C2", rss, 20, cfb)},
+		{"BROSt", p.BROSt, spread.ROSAtTime("C2", bros, 20, cfb)}, // the HEAD cfb, as fbp() uses
+		{"LBt", p.LBt, spread.LengthToBreadthAtTime("C2", lb, 20, cfb)},
+		{"DH", p.DH, spread.DistanceAtTime("C2", rss, 20, cfb)},
+		{"HFI", p.HFI, consumption.FireIntensity(consumption.TotalFuelConsumption("C2", 1, cfb, sfc, 50, 35), rss)},
 	} {
-		if !closeEnough(c.got, c.want, 1e-15) {
+		if !cffdrstest.CloseEnough(c.got, c.want, 1e-15) {
 			t.Errorf("%s = %v, composed from the pieces %v", c.name, c.got, c.want)
 		}
 	}
@@ -150,7 +155,7 @@ func TestPredictOptIns(t *testing.T) {
 	in = validC2()
 	in.FMC, in.Site = 0, site
 	p, _ = Predict(in)
-	if want := FoliarMoistureContent(45, 80, 0, 175, 0); p.FMC != want {
+	if want := crown.FoliarMoistureContent(45, 80, 0, 175, 0); p.FMC != want {
 		t.Errorf("FMC from site = %v, want %v (west longitude folded)", p.FMC, want)
 	}
 	in.FMC = 110

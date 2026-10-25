@@ -1,23 +1,5 @@
 package fbp
 
-// MIGRATION.md is a set of claims about this repository, and DAILY-CHECK.md's
-// step 4 is a person re-reading those claims once a day and deciding whether
-// they are still true. Most of that step is not judgement — it is a table join
-// between the ledger, the test files and the pinned toolchain, and a join done
-// by eye is a join that passes on the day it stops holding.
-//
-// This file does the mechanical half. What is left over for step 4 — whether a
-// changed upstream coefficient matters, whether an exclusion's reason is still a
-// mechanism rather than a symptom — is the half that actually needs reading.
-//
-// These tests run on a fresh clone with no fixture and no Docker. They assert
-// nothing about whether a number is right; that is what the TestCFFDRS* tests
-// are for, and one of the things checked here is that those still exist.
-//
-// The ledger is parsed by internal/ledger, which tools/upstream-drift also uses,
-// so there is one definition of the ledger's shape rather than two that can
-// disagree about which row owns a file.
-
 import (
 	"fmt"
 	"go/ast"
@@ -27,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -38,11 +21,30 @@ import (
 
 const ledgerPath = "MIGRATION.md"
 
-// goPackageDirs are the module's two public packages: fbp at the root and fwi
-// beside it. Every check below that reads Go files reads both, because the
-// ledger's claims cover both — and a check that only globbed the root would pass
-// by not looking at the package that was added second.
-var goPackageDirs = []string{".", "fwi"}
+// goPackageDirs are the module's public packages: fbp at the root, the four FBP
+// packages it composes, and fwi beside them. Every check below that reads Go
+// files reads all of them, because the ledger's claims cover all of them — and a
+// check that only globbed the root would pass by not looking at the packages the
+// equations actually live in.
+var goPackageDirs = []string{".", "fuel", "spread", "crown", "consumption", "fwi"}
+
+// allowedImports is, per package directory, everything its non-test files may
+// import. It is the layering written down: fuel at the bottom, spread, crown and
+// consumption each on fuel alone, fbp composing them, and fwi on nothing — so
+// neither half of the module can start depending on the other, and no FBP
+// package can reach sideways into another. internal/bearing is listed because
+// two of them import it, and it is held to the same `math`-only rule.
+var allowedImports = map[string][]string{
+	".":                {"math", modulePath + "/fuel", modulePath + "/spread", modulePath + "/crown", modulePath + "/consumption", modulePath + "/internal/bearing"},
+	"fuel":             {"math"},
+	"spread":           {"math", modulePath + "/fuel", modulePath + "/internal/bearing"},
+	"crown":            {"math", modulePath + "/fuel"},
+	"consumption":      {"math", modulePath + "/fuel"},
+	"fwi":              {"math"},
+	"internal/bearing": {"math"},
+}
+
+const modulePath = "github.com/LukasSelin/gofbp"
 
 // globPackages returns pattern matched in every public package directory, with
 // forward slashes so a path reads the way MIGRATION.md writes it (`fwi/fwi.go`)
@@ -471,26 +473,39 @@ func TestPackageHasNoDependencies(t *testing.T) {
 		}
 	}
 
-	// Both public packages, and the same rule for each. That rule is also what
-	// keeps fbp and fwi apart: an import of the other package is an import that
-	// is not `math`, so neither can start depending on the other without this
-	// failing — which is the promise that keeps package fbp the FBP System and
-	// nothing else.
+	// Every package against its row of allowedImports. That table is also what
+	// keeps fbp and fwi apart: an import of the other is not on either row, so
+	// neither can start depending on the other without this failing — which is
+	// the promise that keeps the FBP packages the FBP System and nothing else.
 	fset := token.NewFileSet()
-	for _, path := range globPackages(t, "*.go") {
-		if strings.HasSuffix(path, "_test.go") {
-			continue
-		}
-		f, err := parser.ParseFile(fset, path, nil, parser.ImportsOnly)
+	for dir, allowed := range allowedImports {
+		matches, err := filepath.Glob(filepath.Join(dir, "*.go"))
 		if err != nil {
-			t.Fatalf("parse %s: %v", path, err)
+			t.Fatal(err)
 		}
-		for _, imp := range f.Imports {
-			p := strings.Trim(imp.Path.Value, `"`)
-			if p != "math" {
-				t.Errorf("%s imports %q. The README's claim is `math` and nothing else; "+
-					"widening it is a decision about what this package is, not a refactor.", path, p)
+		if len(matches) == 0 {
+			t.Errorf("allowedImports names %s, which has no Go files", dir)
+		}
+		for _, path := range matches {
+			if strings.HasSuffix(path, "_test.go") {
+				continue
 			}
+			f, err := parser.ParseFile(fset, path, nil, parser.ImportsOnly)
+			if err != nil {
+				t.Fatalf("parse %s: %v", path, err)
+			}
+			for _, imp := range f.Imports {
+				if p := strings.Trim(imp.Path.Value, `"`); !slices.Contains(allowed, p) {
+					t.Errorf("%s imports %q. The README's claim is `math` and the module's own "+
+						"packages below this one, nothing else; widening it is a decision about "+
+						"what this package is, not a refactor.", filepath.ToSlash(path), p)
+				}
+			}
+		}
+	}
+	for _, dir := range goPackageDirs {
+		if _, ok := allowedImports[dir]; !ok {
+			t.Errorf("%s is a public package with no row in allowedImports", dir)
 		}
 	}
 }
