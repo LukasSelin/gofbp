@@ -79,6 +79,16 @@ var fwiInputCols = []string{
 	"ffmc_in", "dmc_in", "dc_in", "isi_in", "bui_in",
 }
 
+// fbpGridInputCols identify a cell in fbpRaster()'s section, "fbp_grid_cases":
+// its grid and place in it, and every layer the generator sent. Inputs that
+// fbpRaster() also returns carry _in, and the fuel layer is fuel_code so the
+// "fuel" count of FBP cases stays true.
+var fbpGridInputCols = []string{
+	"grid", "cell", "fuel_code", "lat", "long", "elv", "ffmc_in", "bui", "ws", "wd",
+	"gs", "dj", "aspect", "pc", "pdf", "gfl", "cc", "cbh", "cfl", "fmc_in", "d0_in",
+	"sd", "sh", "hr", "accel", "theta", "isi_in", "buieff",
+}
+
 type fixture struct {
 	Oracle        string           `json:"oracle"`
 	CFFDRSVersion string           `json:"cffdrs_version"`
@@ -87,6 +97,9 @@ type fixture struct {
 	// FWICases is the FWI System's section. Absent from every fixture older than
 	// the 2026-09-24 FWI block, which is a new section rather than a lost one.
 	FWICases []map[string]any `json:"fwi_cases"`
+	// FBPGridCases is fbpRaster()'s section, absent from every fixture older
+	// than the 2026-10-25 fbpRaster() block.
+	FBPGridCases []map[string]any `json:"fbp_grid_cases"`
 
 	path string
 }
@@ -133,12 +146,15 @@ type report struct {
 	// there is nothing to compare, and nothing can have moved.
 	NewSection bool    `json:"new_section,omitempty"`
 	FWI        *report `json:"fwi,omitempty"`
+	// FBPGrid is "fbp_grid_cases", fbpRaster()'s cells, carried the same way.
+	FBPGrid *report `json:"fbp_grid,omitempty"`
 }
 
-// anyMoved reports whether anything moved in this section or the one it carries.
+// anyMoved reports whether anything moved in this section or the ones it carries.
 // It is what the exit status is taken from.
 func (r *report) anyMoved() bool {
-	return len(r.Moved) > 0 || (r.FWI != nil && r.FWI.anyMoved())
+	return len(r.Moved) > 0 || (r.FWI != nil && r.FWI.anyMoved()) ||
+		(r.FBPGrid != nil && r.FBPGrid.anyMoved())
 }
 
 func main() {
@@ -290,26 +306,31 @@ func format(v any) string {
 }
 
 // compare diffs two fixtures: the FBP section at the top level, and the FWI
-// System's section inside it whenever either fixture has one.
+// System's and fbpRaster()'s sections inside it whenever either fixture has one.
 func compare(oldFx, newFx *fixture, tol float64, maxExamples int) *report {
 	rep := compareSection("cases", oldFx.Cases, newFx.Cases, inputCols, tol, maxExamples)
 	rep.Old, rep.New = oldFx.path, newFx.path
 	rep.OldVersions, rep.NewVersions = oldFx.versions(), newFx.versions()
+	rep.FWI = compareSideSection("fwi_cases", oldFx.FWICases, newFx.FWICases, fwiInputCols, tol, maxExamples)
+	rep.FBPGrid = compareSideSection("fbp_grid_cases", oldFx.FBPGridCases, newFx.FBPGridCases,
+		fbpGridInputCols, tol, maxExamples)
+	return rep
+}
 
+// compareSideSection is a section beside "cases", or nil when neither fixture
+// has it — which keeps the report for an older pair exactly what it always was.
+func compareSideSection(section string, oldCases, newCases []map[string]any, inputs []string, tol float64, maxExamples int) *report {
 	switch {
-	case len(oldFx.FWICases) == 0 && len(newFx.FWICases) == 0:
-		// A pre-FWI pair: nothing to say, and saying nothing keeps the report
-		// for such a pair exactly what it always was.
-	case len(oldFx.FWICases) == 0:
-		rep.FWI = &report{Section: "fwi_cases", NewSection: true, NewCases: len(newFx.FWICases),
-			OnlyInNew: len(newFx.FWICases)}
+	case len(oldCases) == 0 && len(newCases) == 0:
+		return nil
+	case len(oldCases) == 0:
+		return &report{Section: section, NewSection: true, NewCases: len(newCases), OnlyInNew: len(newCases)}
 	default:
 		// Including the case where only the OLD fixture has the section: every
-		// column comes back "removed", which is a move — the FWI tests are about
-		// to start failing, and a diff that shrugged would be wrong.
-		rep.FWI = compareSection("fwi_cases", oldFx.FWICases, newFx.FWICases, fwiInputCols, tol, maxExamples)
+		// column comes back "removed", which is a move — the tests reading it are
+		// about to start failing, and a diff that shrugged would be wrong.
+		return compareSection(section, oldCases, newCases, inputs, tol, maxExamples)
 	}
-	return rep
 }
 
 func compareSection(section string, oldCases, newCases []map[string]any, inputs []string, tol float64, maxExamples int) *report {
@@ -467,11 +488,18 @@ func printReport(w io.Writer, rep *report) {
 	}
 	printSection(w, rep)
 
-	if f := rep.FWI; f != nil {
-		p("\n=== fwi_cases (the FWI System) ===\n")
+	for _, s := range []struct {
+		rep   *report
+		title string
+	}{{rep.FWI, "the FWI System"}, {rep.FBPGrid, "fbpRaster()"}} {
+		f := s.rep
+		if f == nil {
+			continue
+		}
+		p("\n=== %s (%s) ===\n", f.Section, s.title)
 		if f.NewSection {
-			p("\nnew section: %d cases, and no fwi_cases in the old fixture to compare them\n"+
-				"against. Nothing in it can have moved.\n", f.NewCases)
+			p("\nnew section: %d cases, and no %s in the old fixture to compare them\n"+
+				"against. Nothing in it can have moved.\n", f.NewCases, f.Section)
 		} else {
 			p("old %d cases, new %d cases\n", f.OldCases, f.NewCases)
 			printSection(w, f)
@@ -484,9 +512,11 @@ func printReport(w io.Writer, rep *report) {
 		return
 	}
 	moved := append([]string(nil), rep.Moved...)
-	if rep.FWI != nil {
-		for _, c := range rep.FWI.Moved {
-			moved = append(moved, "fwi_cases."+c)
+	for _, f := range []*report{rep.FWI, rep.FBPGrid} {
+		if f != nil {
+			for _, c := range f.Moved {
+				moved = append(moved, f.Section+"."+c)
+			}
 		}
 	}
 	p("MOVED: %s\n", strings.Join(moved, ", "))
