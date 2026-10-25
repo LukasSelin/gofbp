@@ -5,35 +5,15 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"reflect"
 	"regexp"
 	"sort"
-	"strings"
-	"sync"
 	"testing"
 
+	"github.com/LukasSelin/gofbp/internal/cffdrstest"
 	"github.com/LukasSelin/gofbp/internal/ledger"
 	"github.com/LukasSelin/gofbp/internal/oracle"
+	"github.com/LukasSelin/gofbp/spread"
 )
-
-// The divergence register, testdata/divergences.json, is what the oracle knows
-// on top of the fixture: every place this package deliberately does not give
-// cffdrs' answer, and which side is right. See internal/oracle.
-//
-// The TestCFFDRS* tests consult it instead of excluding rows by name. A row the
-// register does not cover must match cffdrs; a row it does is held to what the
-// entry says. So a disagreement nobody has written down fails, and one somebody
-// has is checked against its own explanation rather than skipped.
-const registerPath = "testdata/divergences.json"
-
-func loadRegister(t *testing.T) *oracle.Register {
-	t.Helper()
-	r, err := oracle.Load(registerPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return r
-}
 
 // sentinelErrors are the errors a register entry can name, by the name it uses.
 var sentinelErrors = map[string]error{
@@ -47,69 +27,26 @@ var sentinelErrors = map[string]error{
 var gofbpAnswer = map[string]func(get oracle.Getter) float64{
 	"tros-degrees-in-radians": func(get oracle.Getter) float64 {
 		n := func(c string) float64 { return oracle.Num(get, c) }
-		return ROSAtAngle(n("ros"), n("fros"), n("bros"), n("theta")-n("raz"))
+		return spread.ROSAtAngle(n("ros"), n("fros"), n("bros"), n("theta")-n("raz"))
 	},
 	"eq94-misparenthesised": func(get oracle.Getter) float64 {
 		n := func(c string) float64 { return oracle.Num(get, c) }
-		return ROSAtAngle(n("ros_in"), n("fros_in"), n("bros_in"), n("theta"))
+		return spread.ROSAtAngle(n("ros_in"), n("fros_in"), n("bros_in"), n("theta"))
 	},
 }
 
-var (
-	caseFieldsOnce sync.Once
-	caseFields     map[string]int
-)
-
-// caseGetter reads a cffdrsCase by its fixture column names.
-func caseGetter(c cffdrsCase) oracle.Getter {
-	caseFieldsOnce.Do(func() {
-		caseFields = map[string]int{}
-		ty := reflect.TypeOf(cffdrsCase{})
-		for i := 0; i < ty.NumField(); i++ {
-			if tag := strings.Split(ty.Field(i).Tag.Get("json"), ",")[0]; tag != "" {
-				caseFields[tag] = i
-			}
-		}
-	})
-	v := reflect.ValueOf(c)
-	return func(col string) (any, bool) {
-		i, ok := caseFields[col]
-		if !ok {
-			return nil, false
-		}
-		return v.Field(i).Interface(), true
-	}
-}
-
-// gridGetter reads an fbpGridCase, with NA as nil.
-func gridGetter(c fbpGridCase) oracle.Getter {
-	return func(col string) (any, bool) {
-		switch col {
-		case "grid":
-			return c.Grid, true
-		case "cell":
-			return float64(c.Cell), true
-		}
-		p, ok := c.v[col]
-		if !ok || p == nil {
-			return nil, ok
-		}
-		return *p, true
-	}
-}
-
 // sectionRows is every row of a fixture section, as getters.
-func sectionRows(t *testing.T, f cffdrsFixture, section string) []oracle.Getter {
+func sectionRows(t *testing.T, f cffdrstest.Fixture, section string) []oracle.Getter {
 	t.Helper()
 	var rows []oracle.Getter
 	switch section {
 	case "cases":
 		for _, c := range f.Cases {
-			rows = append(rows, caseGetter(c))
+			rows = append(rows, cffdrstest.CaseGetter(c))
 		}
 	case "fbp_grid_cases":
 		for _, c := range f.FBPGrid {
-			rows = append(rows, gridGetter(c))
+			rows = append(rows, cffdrstest.GridGetter(c))
 		}
 	case "theta_cases":
 		for _, m := range f.Theta {
@@ -144,12 +81,12 @@ func sectionRows(t *testing.T, f cffdrsFixture, section string) []oracle.Getter 
 //
 // ledger: fire_behaviour_prediction.r
 func TestCFFDRSDivergences(t *testing.T) {
-	f := loadCFFDRS(t)
+	f := cffdrstest.Load(t)
 	if len(f.Theta) == 0 {
 		t.Fatal("the fixture has no theta_cases: it predates the divergence register " +
 			"(testdata/README.md lists it among the earlier digests). Regenerate it.")
 	}
-	reg := loadRegister(t)
+	reg := cffdrstest.LoadRegister(t)
 	const sigTol, refTol = 1e-9, 1e-9
 
 	for i := range reg.Divergences {
@@ -186,8 +123,8 @@ func TestCFFDRSDivergences(t *testing.T) {
 			for _, row := range matched {
 				v := oracle.Num(row, col)
 				s, r, o := sig(row), ref(row), ours(row)
-				worstSig = maxF(worstSig, relErr(s, v))
-				if !closeEnough(s, v, sigTol) {
+				worstSig = cffdrstest.MaxF(worstSig, cffdrstest.RelErr(s, v))
+				if !cffdrstest.CloseEnough(s, v, sigTol) {
 					if sigBad++; sigBad <= 5 {
 						t.Errorf("%s: cffdrs %s = %v, but the register's signature %s gives %v. "+
 							"cffdrs no longer computes the defect this entry describes: re-read it",
@@ -198,11 +135,11 @@ func TestCFFDRSDivergences(t *testing.T) {
 					undefined++
 					continue
 				}
-				if !closeEnough(r, v, 1e-6) {
+				if !cffdrstest.CloseEnough(r, v, 1e-6) {
 					differ++
 				}
-				worstOurs = maxF(worstOurs, relErr(o, r))
-				if !closeEnough(o, r, refTol) {
+				worstOurs = cffdrstest.MaxF(worstOurs, cffdrstest.RelErr(o, r))
+				if !cffdrstest.CloseEnough(o, r, refTol) {
 					if oursBad++; oursBad <= 5 {
 						t.Errorf("%s: gofbp gives %v where %s (%s) gives %v", d.ID, o, d.Reference, d.Authority, r)
 					}
@@ -223,7 +160,7 @@ func TestCFFDRSDivergences(t *testing.T) {
 // has to resolve to something real, and it and MIGRATION.md's known gaps have
 // to describe the same set of things.
 func TestDivergenceRegisterMatchesTheRepository(t *testing.T) {
-	reg := loadRegister(t)
+	reg := cffdrstest.LoadRegister(t)
 	l, err := ledger.Load(ledgerPath)
 	if err != nil {
 		t.Fatal(err)
@@ -283,7 +220,7 @@ func TestDivergenceRegisterMatchesTheRepository(t *testing.T) {
 	for _, g := range l.KnownGaps {
 		bullets[g.Title] = true
 		if len(gapEntries[g.Title]) == 0 {
-			t.Errorf("%s:%d: known gap %q has no entry in %s", ledgerPath, g.Line, g.Title, registerPath)
+			t.Errorf("%s:%d: known gap %q has no entry in %s", ledgerPath, g.Line, g.Title, cffdrstest.RegisterPath)
 		}
 	}
 	gaps := make([]string, 0, len(gapEntries))

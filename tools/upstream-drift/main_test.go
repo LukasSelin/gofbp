@@ -157,8 +157,8 @@ func TestAFileWithTwoRowsReportsBoth(t *testing.T) {
 		}
 		gofiles[c.Variant] = c.GoFile
 	}
-	if gofiles["fbpMod = TRUE"] != "fbp.go" || gofiles["fbpMod = FALSE"] != "fwi/fwi.go" {
-		t.Errorf("the two rows point at %v; want fbp.go for fbpMod = TRUE and fwi/fwi.go for FALSE", gofiles)
+	if gofiles["fbpMod = TRUE"] != "spread/spread.go" || gofiles["fbpMod = FALSE"] != "fwi/fwi.go" {
+		t.Errorf("the two rows point at %v; want spread/spread.go for fbpMod = TRUE and fwi/fwi.go for FALSE", gofiles)
 	}
 	if rep.Exit != exitAsserted {
 		t.Errorf("exit = %d, want %d", rep.Exit, exitAsserted)

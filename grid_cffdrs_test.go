@@ -1,57 +1,14 @@
 package fbp
 
 import (
-	"encoding/json"
 	"errors"
 	"math"
 	"sort"
 	"testing"
 
+	"github.com/LukasSelin/gofbp/internal/cffdrstest"
 	"github.com/LukasSelin/gofbp/internal/oracle"
 )
-
-// fbpGridCase is one cell of the fixture's fbp_grid_cases: the grid it belongs
-// to, its place in terra's cell order, and every other column by name. A null
-// is NA — the grid block emits every column on every row, so null never means
-// "not emitted" — and reads back as NaN.
-type fbpGridCase struct {
-	Grid string
-	Cell int
-	v    map[string]*float64
-}
-
-func (c *fbpGridCase) UnmarshalJSON(b []byte) error {
-	var m map[string]any
-	if err := json.Unmarshal(b, &m); err != nil {
-		return err
-	}
-	c.v = map[string]*float64{}
-	for k, x := range m {
-		switch k {
-		case "grid":
-			c.Grid, _ = x.(string)
-		case "cell":
-			f, _ := x.(float64)
-			c.Cell = int(f)
-		default:
-			if f, ok := x.(float64); ok {
-				c.v[k] = &f
-			} else {
-				c.v[k] = nil
-			}
-		}
-	}
-	return nil
-}
-
-// f is column k, NaN for NA. A column the row does not carry is NaN too, and
-// TestCFFDRSPredictGrid checks every column it reads is present first.
-func (c fbpGridCase) f(k string) float64 {
-	if p := c.v[k]; p != nil {
-		return *p
-	}
-	return math.NaN()
-}
 
 // fbpGridInputs are the layers the generator sends fbpRaster(), as named in the
 // fixture (an input that is also an output carries _in).
@@ -87,15 +44,15 @@ var fbpGridInputs = []string{
 //
 // ledger: fbpRaster.r
 func TestCFFDRSPredictGrid(t *testing.T) {
-	f := loadCFFDRS(t)
-	reg := loadRegister(t)
+	f := cffdrstest.Load(t)
+	reg := cffdrstest.LoadRegister(t)
 	if len(f.FBPGrid) == 0 {
 		t.Fatal("the fixture has no fbp_grid_cases: it predates the fbpRaster() block " +
 			"(testdata/README.md lists it among the earlier digests). Regenerate it.")
 	}
 	const tol = 1e-9
 
-	byGrid := map[string][]fbpGridCase{}
+	byGrid := map[string][]cffdrstest.GridCase{}
 	for _, c := range f.FBPGrid {
 		byGrid[c.Grid] = append(byGrid[c.Grid], c)
 	}
@@ -125,22 +82,22 @@ func TestCFFDRSPredictGrid(t *testing.T) {
 				t.Fatalf("%s: cells are not 1..%d (cell %d at %d)", id, n, c.Cell, i)
 			}
 			for _, k := range append(append([]string{}, fbpGridInputs...), outCols...) {
-				if _, ok := c.v[k]; !ok {
+				if !c.Has(k) {
 					t.Fatalf("%s cell %d: no %q column", id, c.Cell, k)
 				}
 			}
 		}
-		layer := func(fn func(c fbpGridCase) float64) []float64 {
+		layer := func(fn func(c cffdrstest.GridCase) float64) []float64 {
 			v := make([]float64, n)
 			for i, c := range cells {
 				v[i] = fn(c)
 			}
 			return v
 		}
-		col := func(k string) []float64 { return layer(func(c fbpGridCase) float64 { return c.f(k) }) }
+		col := func(k string) []float64 { return layer(func(c cffdrstest.GridCase) float64 { return c.Col(k) }) }
 		accel := math.NaN()
 		for _, c := range cells {
-			if a := c.f("accel"); !math.IsNaN(a) {
+			if a := c.Col("accel"); !math.IsNaN(a) {
 				if !math.IsNaN(accel) && a != accel {
 					t.Fatalf("%s: accel varies across the grid; PredictGrid takes it once", id)
 				}
@@ -150,14 +107,14 @@ func TestCFFDRSPredictGrid(t *testing.T) {
 		g := Grid{
 			Fuel: col("fuel_code"), FFMC: col("ffmc_in"), BUI: col("bui"),
 			WindKmh:           col("ws"),
-			WindAzimuthDeg:    layer(func(c fbpGridCase) float64 { return c.f("wd") + 180 }),
+			WindAzimuthDeg:    layer(func(c cffdrstest.GridCase) float64 { return c.Col("wd") + 180 }),
 			SlopePct:          col("gs"),
-			UpslopeAzimuthDeg: layer(func(c fbpGridCase) float64 { return c.f("aspect") + 180 }),
+			UpslopeAzimuthDeg: layer(func(c cffdrstest.GridCase) float64 { return c.Col("aspect") + 180 }),
 			PC:                col("pc"), PDF: col("pdf"), CuringPct: col("cc"), GrassFuelLoad: col("gfl"),
 			FMC: col("fmc_in"), Lat: col("lat"), Long: col("long"), ElevM: col("elv"),
 			DayOfYear: col("dj"), D0: col("d0_in"),
 			CBH: col("cbh"), CFL: col("cfl"), StandDensity: col("sd"), StandHeight: col("sh"),
-			ElapsedMin: layer(func(c fbpGridCase) float64 { return c.f("hr") * 60 }),
+			ElapsedMin: layer(func(c cffdrstest.GridCase) float64 { return c.Col("hr") * 60 }),
 		}
 		preds, errs, err := PredictGrid(g, GridOptions{Crown: CrownCFFDRS, PointIgnition: accel == 1})
 		if err != nil {
@@ -165,10 +122,10 @@ func TestCFFDRSPredictGrid(t *testing.T) {
 		}
 
 		for i, c := range cells {
-			code := c.f("fuel_code")
+			code := c.Col("fuel_code")
 			codes[code] = true
 			fuel, _ := FuelFromGridCode(code)
-			d := reg.Find("fbp_grid_cases", gridGetter(c), "*")
+			d := reg.Find("fbp_grid_cases", cffdrstest.GridGetter(c), "*")
 			switch {
 			case d != nil && d.Verdict == oracle.GoFBPRefuses:
 				if want := sentinelErrors[d.Error]; !errors.Is(errs[i], want) {
@@ -186,13 +143,13 @@ func TestCFFDRSPredictGrid(t *testing.T) {
 				t.Fatalf("%s: verdict %s in fbp_grid_cases, which this test does not know how to hold", d.ID, d.Verdict)
 			case errs[i] != nil:
 				t.Errorf("%s cell %d code %v: refused, and no entry in %s explains it: %v",
-					id, c.Cell, code, registerPath, errs[i])
+					id, c.Cell, code, cffdrstest.RegisterPath, errs[i])
 				refused++
 				continue
 			}
 			computed++
 			p := preds[i]
-			fds[c.f("fd")]++
+			fds[c.Col("fd")]++
 			got := map[string]float64{
 				"cfb": p.CFB, "cfc": p.CFC, "fd": p.FD.Code(), "hfi": p.HFI, "ros": p.ROS,
 				"sfc": p.SFC, "tfc": p.TFC, "be": p.BE, "sf": p.SF, "isi": p.ISI, "fmc": p.FMC,
@@ -202,12 +159,12 @@ func TestCFFDRSPredictGrid(t *testing.T) {
 				"lb": p.LB, "lbt": p.LBt, "wsv": p.WSV, "dh": p.DH, "db": p.DB, "df": p.DF,
 			}
 			for _, k := range outCols {
-				g, w := got[k], c.f(k)
+				g, w := got[k], c.Col(k)
 				if k == "raz" {
-					g, w = angleDiff(p.RAZ, w), 0
+					g, w = cffdrstest.AngleDiff(p.RAZ, w), 0
 				}
-				worst[k] = maxF(worst[k], relErr(g, w))
-				if !closeEnough(g, w, tol) {
+				worst[k] = cffdrstest.MaxF(worst[k], cffdrstest.RelErr(g, w))
+				if !cffdrstest.CloseEnough(g, w, tol) {
 					if shown++; shown <= 15 {
 						t.Errorf("%s cell %d code %v (%s): %s = %v, fbpRaster %v", id, c.Cell, code, fuel, k, g, w)
 					}

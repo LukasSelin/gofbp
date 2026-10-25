@@ -62,16 +62,16 @@ be asserted is not a port.
 Establish which of three cases this row is in, and say which one in your first
 message.
 
-- [ ] Read `testdata/gen_cffdrs_reference.R`'s emit block and `cffdrsCase` in `cffdrs_test.go`.
+- [ ] Read `testdata/gen_cffdrs_reference.R`'s emit block and `Case` in `internal/cffdrstest/fixture.go`.
 
 **(a) The column already exists.** Porting the row needs **no generator change**:
 the column stops being an input the tests read and becomes the assertion. It does
 not move the fixture digest either, which makes it the cheapest case to review.
 
 `sfc` was the first worked example — it went ✅ on 2026-09-18, and
-`consumption_cffdrs_test.go` is what that looked like, including how it handled
+`consumption/consumption_cffdrs_test.go` is what that looked like, including how it handled
 the one driver the fixture has no column for. **`C6calc.r` was the second, on
-2026-09-19, and it is the better template**: `c6_cffdrs_test.go` shows what to do
+2026-09-19, and it is the better template**: `crown/c6_cffdrs_test.go` shows what to do
 when the existing column is a *different quantity* from the one the tests
 already read, which is the shape most remaining case (a) rows will have.
 
@@ -90,7 +90,7 @@ check where `fmc` did not: its crown block varies FMC through LAT × Dj and ISI
 through FFMC × WS × GS, so every coefficient in eqs. 61 and 64 is reached.
 
 **(b) The column can be added.** Add the name to `needed`, add the line to
-`case_json`, add the field to `cffdrsCase`, regenerate, record the new digest.
+`case_json`, add the field to `cffdrstest.Case`, regenerate, record the new digest.
 This *does* move the digest — see §4, where proving it moved nothing else is the
 work.
 
@@ -117,7 +117,7 @@ the surface sweeps, and `fbp()` returns neither. So the per-fuel default tables
 have no direct column — and yet they went ✅, not 🟢, on 2026-10-21, because a
 quantity with no column can still be asserted *forward* through the first output
 it enters: CSI is eq. 56 of the CBH `fbp()` used, CFC is eq. 66 of the CFL. See
-`crowndefaults_cffdrs_test.go`. Prefer that to inverting an output, which is an
+`crown/crowndefaults_cffdrs_test.go`. Prefer that to inverting an output, which is an
 inference and has to be called one. The same trap has a second edge: a value
 sent *above* the honoured range (CBH > 50, CFL > 2) is substituted exactly like
 -1, so "positive" is not "honoured" — `usableForCrown` learned that the hard way.
@@ -131,15 +131,16 @@ sent *above* the honoured range (CBH > 50, CFL > 2) is substituted exactly like
 
 ## 3. Write the Go
 
-- [ ] Zero dependencies. `math` and nothing else — `TestPackageHasNoDependencies` enforces this, and widening it is a decision about what this package is, not a refactor.
-- [ ] Match the file layout: coefficients in a table near the top, equation numbers in the doc comments, guards for non-finite input (`crown.go` is the most recent example and the best template).
+- [ ] Put the port in the package its quantity belongs to — `spread` for rates of spread and the ellipse, `crown` for the threshold and its inputs, `consumption` for fuel consumed and intensity, `fuel` for the fuel table; `fbp` at the root only composes them. A port that does not fit any of them is a question for the maintainer, not a new package.
+- [ ] Zero dependencies. `math` and the packages `allowedImports` in `ledger_test.go` grants that directory, nothing else — `TestPackageHasNoDependencies` enforces this, and widening it is a decision about what the package is, not a refactor.
+- [ ] Match the file layout: coefficients in a table near the top, equation numbers in the doc comments, guards for non-finite input (`crown/crown.go` is the most recent example and the best template).
 - [ ] Units follow the README's table. km/h, percent rise, m/min, azimuths clockwise from true north and always *towards*.
 - [ ] Do not add a local default, a fuel mapping, or a country-specific assumption. See the escalation note below.
 - [ ] A **new file** must be named in the ledger, or `TestLedgerCoversEveryGoFile` fails. A file with nothing exported is exempt.
 
 ## 4. Assert it
 
-- [ ] If the row needs case (b), change the generator and `cffdrsCase` **together** — the `needed` guard exists so a changed upstream output contract fails loudly instead of emitting a column of nulls.
+- [ ] If the row needs case (b), change the generator and `cffdrstest.Case` **together** — the `needed` guard exists so a changed upstream output contract fails loudly instead of emitting a column of nulls.
 - [ ] **Keep the old fixture before regenerating.** You cannot diff what you overwrote:
 
   ```
@@ -181,7 +182,7 @@ exclusion needs a reason with a mechanism in it, not a symptom.
 
 ## Escalate rather than decide
 
-- **Per-fuel CBH/CFL was the sharp one, and it is decided.** On 2026-10-21 the maintainer chose an opt-in lookup (`crowndefaults.go`); `Crown` applies no default. Anything that would make `Crown`, `CrownFractionBurned` or another computation apply those tables silently reopens that decision — ask first.
+- **Per-fuel CBH/CFL was the sharp one, and it is decided.** On 2026-10-21 the maintainer chose an opt-in lookup (`crown/crowndefaults.go`); `Crown` applies no default. Anything that would make `Crown`, `CrownFractionBurned` or another computation apply those tables silently reopens that decision — ask first.
 - Anything else on `DAILY-CHECK.md`'s escalation list: a default for FMC or SFC, committing the fixture, moving a row into or out of scope, putting the oracle workflow on push.
 - **A moved reference number you cannot explain.** Report it; do not commit past it.
 

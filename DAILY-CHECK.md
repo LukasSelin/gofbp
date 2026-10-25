@@ -124,7 +124,7 @@ Stop and ask before doing any of these. Each one changes what the package
 - Adding a default for FMC, SFC, CBH, CFL or a fuel-type mapping. The absence of
   local judgement is the package's central claim; a default is local judgement.
   The published CBH/CFL tables exist as a lookup the caller opts into
-  (`crowndefaults.go`, decided 2026-10-21); a default is something applied
+  (`crown/crowndefaults.go`, decided 2026-10-21); a default is something applied
   without being asked for, and that is still the line.
 - Committing the fixture. It is GPL-2 output in an MIT repository, and that is
   the reason it is generated rather than stored.
