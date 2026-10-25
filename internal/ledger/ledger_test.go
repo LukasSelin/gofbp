@@ -3,6 +3,7 @@ package ledger
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -25,10 +26,10 @@ func TestLoadTheRealLedger(t *testing.T) {
 	if len(l.Log) < 1 {
 		t.Errorf("%d log entries", len(l.Log))
 	}
-	// Empty since 2026-10-21, when the last row with work in it went 🟢; the
-	// ledger says so with NothingOwed, which is what lets it parse.
-	if len(l.DependencyOrder) != 0 {
-		t.Errorf("dependency order: %v, want empty", l.DependencyOrder)
+	// Empty from 2026-10-21, when the last row with work in it went 🟢, until the
+	// 2026-10-25 re-scope; TestDependencyOrderKeepsItsOrder pins what it holds.
+	if len(l.DependencyOrder) == 0 {
+		t.Error("dependency order is empty, but the 2026-10-25 re-scope put two rows on it")
 	}
 
 	byKey := l.ByKey()
@@ -100,10 +101,12 @@ func TestDependencyOrderKeepsItsOrder(t *testing.T) {
 	// Updating
 	// it IS the check: a parser that deduplicated or reordered the list would
 	// land on something else.
-	// Since 2026-10-21 there is no top row: the list is empty and says so. A
-	// row going back to 🔴 must reappear here, and this is the line to update.
-	if len(l.DependencyOrder) != 0 {
-		t.Errorf("first item = %q, want an empty list", l.DependencyOrder[0])
+	// From 2026-10-21 to 2026-10-25 there was no top row: the list was empty and
+	// said so. The 2026-10-25 re-scope brought the two raster wrappers back, FWI
+	// first.
+	want := []string{"fwiRaster.r", "fbpRaster.r"}
+	if !slices.Equal(l.DependencyOrder, want) {
+		t.Errorf("dependency order = %q, want %q", l.DependencyOrder, want)
 	}
 	seen := map[string]bool{}
 	for _, f := range l.DependencyOrder {

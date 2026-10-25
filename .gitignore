@@ -9,3 +9,6 @@
 go.work
 go.work.sum
 .DS_Store
+
+# Ralph loop state, per session.
+/.claude/.ralph-loop.local.md
