@@ -1,6 +1,6 @@
 ---
 description: Port one row from the migration ledger — oracle column first, then the Go, then the tests and the ledger
-argument-hint: "[ledger row] (default: top unblocked — none since 2026-10-21)"
+argument-hint: "[ledger row] (default: top unblocked)"
 allowed-tools: Bash(go run ./tools/...:*), Bash(git:*), Bash(go test:*), Bash(go build:*), Bash(go vet:*), Bash(./testdata/regen-cffdrs.sh:*), Bash(sha256sum:*), Bash(cp:*), Bash(gh pr create:*), Bash(gh pr view:*), Read, Edit, Write, Glob, Grep, WebFetch
 ---
 
@@ -12,7 +12,7 @@ That list is a dependency order, and porting out of it produces code the oracle
 cannot check yet, which is the one outcome this repository is organised to
 prevent.
 
-**If that list says "Nothing is owed."** — true since 2026-10-21 — there is no row
+**If that list says "Nothing is owed."** — true from 2026-10-21 to 2026-10-25 — there is no row
 to take. Report that and stop; do not reach for a 🟢 or ✅ row to have something
 to do. Work returns to the list only when a row goes back to 🔴, and the daily
 `/migration-check` is what notices that.
