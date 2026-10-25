@@ -79,15 +79,24 @@ type Grid struct {
 type GridOptions struct {
 	Crown         CrownSource // as Input.Crown; CrownUnset refuses every cell
 	PointIgnition bool        // as Input.PointIgnition
+
+	// Workers is how many goroutines share the cells; 0 or 1 is one, the
+	// calling goroutine. It is the caller's because the package cannot ask:
+	// runtime.NumCPU is an import, and the package imports math alone.
+	Workers int
 }
 
 // GridError is PredictGrid's refusal of the whole grid: a layer whose length
-// is not Fuel's. Cell refusals are not GridErrors; see PredictGrid.
+// is not Fuel's, or, from PredictGridInto, an output slice whose length is not.
+// Cell refusals are not GridErrors; see PredictGrid.
 type GridError struct {
-	Layer string // the Grid field at fault
+	Layer string // the Grid field at fault, or PredictGridInto's "out" or "errs"
 }
 
 func (e *GridError) Error() string {
+	if e.Layer == "out" || e.Layer == "errs" {
+		return "fbp: output slice " + e.Layer + " differs in length from Fuel"
+	}
 	return "fbp: grid layer " + e.Layer + " differs in length from Fuel"
 }
 
@@ -123,10 +132,17 @@ func (e *GridError) Error() string {
 // cell takes the next cell's answer and the last takes the first cell's.
 // Here such a cell is refused like any other, and no other cell moves.
 //
-// Cells are independent and are computed in order with no shared state, so a
-// caller who wants parallelism can split the slices across goroutines and get
-// bit-identical results. This package does not: it imports math and nothing
-// else. fbpRaster()'s m and cores are that chunking, and change no value.
+// Cells are independent and share no state, so GridOptions.Workers above 1
+// shares the cells among that many goroutines: the grid is cut into a few
+// contiguous chunks per worker, each worker takes the next chunk until none is
+// left, and each chunk writes only its own cells of the output. It changes no
+// value, no error and no cell's place: a cell is the same arithmetic on
+// whichever goroutine runs it, and the result is bit-identical to Workers 1.
+// fbpRaster()'s m and cores are the same chunking, and change no value either.
+// Workers above the cell count is the cell count; the call returns when every
+// chunk is done.
+//
+// PredictGridInto is the same into slices the caller provides and may reuse.
 //
 // Not ported: reading or writing rasters (the caller's); the reprojection to
 // EPSG:4326 that fbpRaster() runs when there is no LAT layer, which needs sf —
@@ -134,8 +150,45 @@ func (e *GridError) Error() string {
 // for the reason Predict gives; and select and output, which only choose which
 // layers come back.
 func PredictGrid(g Grid, opt GridOptions) ([]Prediction, []error, error) {
+	if err := checkGrid(g); err != nil {
+		return nil, nil, err
+	}
+	out, errs := make([]Prediction, len(g.Fuel)), make([]error, len(g.Fuel))
+	predictInto(out, errs, g, opt)
+	return out, errs, nil
+}
+
+// PredictGridInto is PredictGrid writing into out and errs, which must each be
+// as long as g.Fuel, instead of into slices it makes. Every cell of both is
+// written — a refused cell's NaNs, a computed cell's nil error — so a buffer
+// reused from an earlier call carries nothing over, and the values are
+// PredictGrid's to the bit. A layer of the wrong length is refused first, then
+// out, then errs, each as a *GridError, and then nothing is written.
+//
+// It exists for the caller who runs the same grid size again and again. At
+// 100k cells the two slices PredictGrid makes are 31 MB, zeroed on the calling
+// goroutine before any worker starts; that was 3.1 ms of a 27.7 ms call at 24
+// workers on the machine bench_test.go was measured on (11%), and it does not
+// shrink with more workers. Workers <= 1 allocates nothing here.
+func PredictGridInto(out []Prediction, errs []error, g Grid, opt GridOptions) error {
+	if err := checkGrid(g); err != nil {
+		return err
+	}
+	if len(out) != len(g.Fuel) {
+		return &GridError{Layer: "out"}
+	}
+	if len(errs) != len(g.Fuel) {
+		return &GridError{Layer: "errs"}
+	}
+	predictInto(out, errs, g, opt)
+	return nil
+}
+
+// checkGrid is PredictGrid's refusal: the first layer, in Grid's field order,
+// that is neither nil nor Fuel's length.
+func checkGrid(g Grid) error {
 	n := len(g.Fuel)
-	layers := []struct {
+	for _, l := range [...]struct {
 		name string
 		v    []float64
 	}{
@@ -147,22 +200,38 @@ func PredictGrid(g Grid, opt GridOptions) ([]Prediction, []error, error) {
 		{"DayOfYear", g.DayOfYear}, {"D0", g.D0},
 		{"CBH", g.CBH}, {"CFL", g.CFL}, {"StandDensity", g.StandDensity}, {"StandHeight", g.StandHeight},
 		{"ElapsedMin", g.ElapsedMin},
-	}
-	for _, l := range layers {
+	} {
 		if l.v != nil && len(l.v) != n {
-			return nil, nil, &GridError{Layer: l.name}
+			return &GridError{Layer: l.name}
 		}
 	}
+	return nil
+}
 
+// predictInto is every cell of a checked grid, written into out and errs, on
+// opt.Workers goroutines.
+func predictInto(out []Prediction, errs []error, g Grid, opt GridOptions) {
+	n := len(g.Fuel)
+	if opt.Workers <= 1 {
+		// Not through inChunks: the closure it takes escapes to the goroutines,
+		// and what it captures with it, which would cost the serial path
+		// allocations it never had. Hence also the copies below.
+		predictCells(g, opt, out, errs, 0, n)
+	} else {
+		g, opt, out, errs := g, opt, out, errs
+		inChunks(n, opt.Workers, func(lo, hi int) { predictCells(g, opt, out, errs, lo, hi) })
+	}
+}
+
+// predictCells is PredictGrid's cells lo to hi-1, written into out and errs.
+func predictCells(g Grid, opt GridOptions, out []Prediction, errs []error, lo, hi int) {
 	at := func(v []float64, i int) float64 {
 		if v == nil {
 			return 0
 		}
 		return v[i]
 	}
-	out := make([]Prediction, n)
-	errs := make([]error, n)
-	for i := 0; i < n; i++ {
+	for i := lo; i < hi; i++ {
 		fuel, ok := FuelFromGridCode(g.Fuel[i])
 		if !ok {
 			out[i], errs[i] = refusedCell(), ErrGridFuelCode
@@ -189,7 +258,89 @@ func PredictGrid(g Grid, opt GridOptions) ([]Prediction, []error, error) {
 		}
 		out[i], errs[i] = p, err
 	}
-	return out, errs, nil
+}
+
+// chunksPerWorker is how many chunks inChunks cuts per worker. One block per
+// worker leaves the call waiting on the slowest block, and the cost of a cell
+// is not uniform: an FBP cell refused for NF or WA costs a fraction of a C6
+// crown fire, and a raster puts them in patches. With several chunks each, a
+// worker that finishes early takes another. Against one block per worker, at
+// 100k cells and 24 workers on a 12-core Ryzen 9 3900X, 8 took 16% off the
+// clustered FBP grid in bench_test.go and 39% off the uniform FWI grid (where
+// cells cost alike but workers do not run alike: they start at different
+// times, and at 24 two share each core). 4 was within noise of 8 on the
+// clustered grid and took only 32% off the FWI one.
+const chunksPerWorker = 8
+
+// inChunks runs f over [0, n) cut into contiguous chunks, on workers
+// goroutines, and returns when all of them have. With one worker or no more
+// than one cell — workers <= 1, or n <= 1 — it is f(0, n) on the calling
+// goroutine.
+//
+// There are chunksPerWorker chunks per worker (at most n), differing in size by
+// at most one cell, and they are handed out in order through a buffered
+// channel of chunk indices, filled and closed before any worker starts: each
+// worker takes the next index until there are none. Which goroutine runs a
+// chunk is the scheduler's, but every cell is in exactly one chunk and f
+// writes only its own cells, so no value depends on it. The join is one
+// channel receive per worker, which is also what publishes the workers' writes
+// to the caller.
+//
+// A panic in f does not kill the process, as it would if left on a worker: the
+// worker recovers it, drains the chunks no one has taken so the others stop
+// after the chunk they are on, and sends the value over the join channel. Once
+// every worker has stopped, inChunks panics with it on the calling goroutine,
+// so a parallel run fails as the serial path does, with a value the caller can
+// recover — and no goroutine is left writing into the output. If several
+// chunks panic, the first value received is the one re-raised, which need not
+// be the lowest chunk's, and the stack trace is the caller's, not the
+// worker's. Cells not reached are left as they were, as they are when the
+// serial path panics.
+func inChunks(n, workers int, f func(lo, hi int)) {
+	if workers > n {
+		workers = n
+	}
+	if workers <= 1 {
+		f(0, n)
+		return
+	}
+	chunks := min(workers*chunksPerWorker, n)
+	next := make(chan int, chunks)
+	for c := 0; c < chunks; c++ {
+		next <- c
+	}
+	close(next)
+	size, extra := n/chunks, n%chunks
+	done := make(chan any, workers)
+	for w := 0; w < workers; w++ {
+		go func() {
+			defer func() {
+				p := recover()
+				if p != nil {
+					for range next {
+					}
+				}
+				done <- p
+			}()
+			for c := range next {
+				lo := c*size + min(c, extra)
+				hi := lo + size
+				if c < extra {
+					hi++
+				}
+				f(lo, hi)
+			}
+		}()
+	}
+	var first any
+	for w := 0; w < workers; w++ {
+		if p := <-done; p != nil && first == nil {
+			first = p
+		}
+	}
+	if first != nil {
+		panic(first)
+	}
 }
 
 // refusedCell is a Prediction with NaN in every number and no FD.

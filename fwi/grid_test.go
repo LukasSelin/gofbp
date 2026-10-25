@@ -3,6 +3,8 @@ package fwi
 import (
 	"errors"
 	"math"
+	"strconv"
+	"sync/atomic"
 	"testing"
 )
 
@@ -220,5 +222,444 @@ func TestStepGridRefusesRaggedLayers(t *testing.T) {
 	got, err := StepGrid(GridState{}, Grid{}, 7)
 	if err != nil || len(got.FWI) != 0 {
 		t.Errorf("empty grid: %v, %d cells", err, len(got.FWI))
+	}
+}
+
+// parallelCases is a sweep with NaNs in a weather layer, a latitude and a
+// code, and an empty grid.
+func parallelCases() []struct {
+	name string
+	y    GridState
+	g    Grid
+} {
+	g, wx, _ := gridOf()
+	n := len(wx)
+	g.TempC[5], g.WindKmh[77], g.LatDeg[n-1] = math.NaN(), math.NaN(), math.NaN()
+	y := UniformGridState(StartupState(), n)
+	y.DMC[300] = math.NaN()
+	return []struct {
+		name string
+		y    GridState
+		g    Grid
+	}{{"sweep", y, g}, {"empty", GridState{}, Grid{}}}
+}
+
+// parallelWorkers is the worker counts every parallel path is held to: none,
+// one, counts that divide the grid and counts that do not, and more than the
+// cells.
+func parallelWorkers(n int) []int { return []int{-1, 0, 1, 2, 3, 7, n + 5} }
+
+// newGridIndices is n cells of out, every one -12345, so a cell a call fails to
+// write shows.
+func newGridIndices(n int) GridIndices {
+	ix := GridIndices{}
+	for _, p := range []*[]float64{&ix.FFMC, &ix.DMC, &ix.DC, &ix.ISI, &ix.BUI, &ix.FWI, &ix.DSR} {
+		*p = make([]float64, n)
+		for i := range *p {
+			(*p)[i] = -12345
+		}
+	}
+	return ix
+}
+
+// sameIndices is got against want, every layer, every cell, to the bit.
+func sameIndices(t *testing.T, name string, got, want GridIndices) {
+	t.Helper()
+	for _, l := range []struct {
+		name      string
+		got, want []float64
+	}{
+		{"FFMC", got.FFMC, want.FFMC}, {"DMC", got.DMC, want.DMC}, {"DC", got.DC, want.DC},
+		{"ISI", got.ISI, want.ISI}, {"BUI", got.BUI, want.BUI}, {"FWI", got.FWI, want.FWI},
+		{"DSR", got.DSR, want.DSR},
+	} {
+		if len(l.got) != len(l.want) {
+			t.Fatalf("%s: %s has %d cells, want %d", name, l.name, len(l.got), len(l.want))
+		}
+		for i := range l.want {
+			if math.Float64bits(l.got[i]) != math.Float64bits(l.want[i]) {
+				t.Errorf("%s: %s cell %d = %v, serial %v", name, l.name, i, l.got[i], l.want[i])
+			}
+		}
+	}
+}
+
+// StepGridParallel and StepGridInto are StepGrid to the bit, cell for cell,
+// whatever the worker count — dividing the grid, not dividing it, exceeding it,
+// or with no cells — and StepGridInto is so into a dirty buffer and in place.
+func TestStepGridParallelIsBitIdentical(t *testing.T) {
+	for _, tc := range parallelCases() {
+		want, err := StepGrid(tc.y, tc.g, 8)
+		if err != nil {
+			t.Fatal(err)
+		}
+		n := len(tc.g.TempC)
+		for _, workers := range parallelWorkers(n) {
+			name := tc.name + ", " + strconv.Itoa(workers) + " workers"
+			got, err := StepGridParallel(tc.y, tc.g, 8, workers)
+			if err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
+			sameIndices(t, name+", StepGridParallel", got, want)
+
+			into := newGridIndices(n)
+			if err := StepGridInto(into, tc.y, tc.g, 8, workers); err != nil {
+				t.Fatalf("%s: StepGridInto: %v", name, err)
+			}
+			sameIndices(t, name+", StepGridInto", into, want)
+
+			// In place: yesterday's own slices are out's codes.
+			inPlace := newGridIndices(n)
+			copy(inPlace.FFMC, tc.y.FFMC)
+			copy(inPlace.DMC, tc.y.DMC)
+			copy(inPlace.DC, tc.y.DC)
+			if err := StepGridInto(inPlace, inPlace.State(), tc.g, 8, workers); err != nil {
+				t.Fatalf("%s: StepGridInto in place: %v", name, err)
+			}
+			sameIndices(t, name+", StepGridInto in place", inPlace, want)
+		}
+	}
+}
+
+// The whole-grid refusals do not depend on the worker count or the path: same
+// layer, same cell, same message, and no output.
+func TestStepGridParallelRefusesAsStepGrid(t *testing.T) {
+	g, wx, _ := gridOf()
+	n := len(wx)
+	y := UniformGridState(StartupState(), n)
+	g.RHPct[3], g.WindKmh[n-2], g.PrecipMm[n/2], g.PrecipMm[n-1] = -1, -1, -1, -1
+	ragged := g
+	ragged.LatDeg = g.LatDeg[:n-1]
+	for _, gg := range []Grid{g, ragged} {
+		_, want := StepGrid(y, gg, 7)
+		var wge *GridError
+		if !errors.As(want, &wge) {
+			t.Fatalf("StepGrid: err %v, want a GridError", want)
+		}
+		for _, workers := range []int{2, 3, 7, n + 5} {
+			got, err := StepGridParallel(y, gg, 7, workers)
+			var ge *GridError
+			if !errors.As(err, &ge) || *ge != *wge || got.FFMC != nil {
+				t.Errorf("%d workers: err %v, want %v and no output", workers, err, want)
+			}
+			// A short out too, which must not be what is reported.
+			into := newGridIndices(n)
+			into.DSR = into.DSR[:1]
+			err = StepGridInto(into, y, gg, 7, workers)
+			if !errors.As(err, &ge) || *ge != *wge || into.FFMC[0] != -12345 {
+				t.Errorf("%d workers: StepGridInto err %v, want %v and nothing written", workers, err, want)
+			}
+		}
+	}
+}
+
+// StepGridInto refuses an out slice of the wrong length after the grid's own
+// refusals, in GridIndices' field order, and writes nothing when it does.
+func TestStepGridIntoRefusesOutLengths(t *testing.T) {
+	g, wx, _ := gridOf()
+	n := len(wx)
+	y := UniformGridState(StartupState(), n)
+	for _, tc := range []struct {
+		layer string
+		cut   func(*GridIndices)
+	}{
+		{"out.FFMC", func(ix *GridIndices) { ix.FFMC = nil }},
+		{"out.ISI", func(ix *GridIndices) { ix.ISI = ix.ISI[:n-1]; ix.DSR = ix.DSR[:3] }},
+		{"out.DSR", func(ix *GridIndices) { ix.DSR = append(ix.DSR, 0) }},
+	} {
+		for _, workers := range []int{1, 3} {
+			into := newGridIndices(n)
+			tc.cut(&into)
+			err := StepGridInto(into, y, g, 7, workers)
+			var ge *GridError
+			if !errors.As(err, &ge) || ge.Layer != tc.layer || ge.Cell != -1 {
+				t.Errorf("%s, %d workers: err %v", tc.layer, workers, err)
+			}
+			if into.DMC[0] != -12345 {
+				t.Errorf("%s, %d workers: written by a refused call", tc.layer, workers)
+			}
+		}
+	}
+	if err := StepGridInto(GridIndices{}, GridState{}, Grid{}, 7, 4); err != nil {
+		t.Errorf("empty grid into empty out: %v", err)
+	}
+}
+
+// The serial path allocates what it returns and nothing else: StepGrid its
+// seven slices, StepGridInto nothing.
+func TestStepGridSerialAllocations(t *testing.T) {
+	g, wx, _ := gridOf()
+	y := UniformGridState(StartupState(), len(wx))
+	out := newGridIndices(len(wx))
+	if a := testing.AllocsPerRun(20, func() { StepGrid(y, g, 7) }); a != 7 {
+		t.Errorf("StepGrid: %v allocations, want 7", a)
+	}
+	if a := testing.AllocsPerRun(20, func() { StepGridInto(out, y, g, 7, 1) }); a != 0 {
+		t.Errorf("StepGridInto, 1 worker: %v allocations, want 0", a)
+	}
+}
+
+// inChunks hands every cell to f exactly once, in chunks that tile [0, n),
+// whatever the worker count.
+func TestInChunksCoversEveryCellOnce(t *testing.T) {
+	for _, n := range []int{0, 1, 2, 3, 7, 64, 1000, 1001} {
+		for _, workers := range []int{-1, 0, 1, 2, 3, 7, n + 5} {
+			seen := make([]int32, n)
+			inChunks(n, workers, func(lo, hi int) {
+				if lo > hi || lo < 0 || hi > n {
+					t.Errorf("n %d, %d workers: chunk [%d, %d)", n, workers, lo, hi)
+					return
+				}
+				for i := lo; i < hi; i++ {
+					atomic.AddInt32(&seen[i], 1)
+				}
+			})
+			for i, c := range seen {
+				if c != 1 {
+					t.Fatalf("n %d, %d workers: cell %d seen %d times", n, workers, i, c)
+				}
+			}
+		}
+	}
+}
+
+// daysOf is d days over g's cells: each day's weather a shifted copy of g's,
+// so no two days are alike, and the months running on from July.
+func daysOf(g Grid, d int) []GridDay {
+	shift := func(v []float64, k int, add float64) []float64 {
+		out := make([]float64, len(v))
+		for i := range v {
+			out[i] = v[(i+k)%len(v)] + add
+		}
+		return out
+	}
+	days := make([]GridDay, d)
+	for k := range days {
+		days[k] = GridDay{Month: 7 + k%6, Weather: Grid{
+			TempC: shift(g.TempC, 3*k, float64(k)), RHPct: shift(g.RHPct, 5*k, 0),
+			WindKmh: shift(g.WindKmh, 7*k, 0), PrecipMm: shift(g.PrecipMm, 11*k, 0),
+			LatDeg: g.LatDeg,
+		}}
+	}
+	return days
+}
+
+// chainStepGrid is StepGrid called once per day, each day handed the last.
+func chainStepGrid(t *testing.T, y GridState, days []GridDay) []GridIndices {
+	t.Helper()
+	var out []GridIndices
+	for _, day := range days {
+		ix, err := StepGrid(y, day.Weather, day.Month)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, ix)
+		y = ix.State()
+	}
+	return out
+}
+
+// StepGridDays is the chain of StepGrid calls, every day to the bit, at every
+// worker count, into its own slices, into dirty buffers, and in place in one.
+func TestStepGridDaysIsChainedStepGrid(t *testing.T) {
+	for _, tc := range parallelCases() {
+		n := len(tc.g.TempC)
+		for _, nDays := range []int{0, 1, 5} {
+			days := daysOf(tc.g, nDays)
+			if n > 0 && nDays > 1 {
+				days[1].Weather.WindKmh[9] = math.NaN()
+			}
+			want := chainStepGrid(t, tc.y, days)
+			for _, workers := range parallelWorkers(n) {
+				name := tc.name + ", " + strconv.Itoa(nDays) + " days, " + strconv.Itoa(workers) + " workers"
+				got, err := StepGridDays(tc.y, days, workers)
+				if err != nil {
+					t.Fatalf("%s: %v", name, err)
+				}
+				if len(got) != nDays {
+					t.Fatalf("%s: %d days, want %d", name, len(got), nDays)
+				}
+				for d := range want {
+					sameIndices(t, name+", StepGridDays day "+strconv.Itoa(d), got[d], want[d])
+				}
+
+				into := make([]GridIndices, nDays)
+				for d := range into {
+					into[d] = newGridIndices(n)
+				}
+				if err := StepGridDaysInto(into, tc.y, days, workers); err != nil {
+					t.Fatalf("%s: StepGridDaysInto: %v", name, err)
+				}
+				for d := range want {
+					sameIndices(t, name+", StepGridDaysInto day "+strconv.Itoa(d), into[d], want[d])
+				}
+
+				// One buffer for every day, its codes yesterday's.
+				one := newGridIndices(n)
+				copy(one.FFMC, tc.y.FFMC)
+				copy(one.DMC, tc.y.DMC)
+				copy(one.DC, tc.y.DC)
+				same := make([]GridIndices, nDays)
+				for d := range same {
+					same[d] = one
+				}
+				if err := StepGridDaysInto(same, one.State(), days, workers); err != nil {
+					t.Fatalf("%s: StepGridDaysInto in place: %v", name, err)
+				}
+				if nDays > 0 {
+					sameIndices(t, name+", StepGridDaysInto in place, last day", one, want[nDays-1])
+				}
+			}
+		}
+	}
+}
+
+// Each day is refused as the chain would refuse it on that day — the first
+// refused day, StepGrid's error for it — before any day is computed.
+func TestStepGridDaysRefusesAsChainedStepGrid(t *testing.T) {
+	g, wx, _ := gridOf()
+	n := len(wx)
+	y := UniformGridState(StartupState(), n)
+	for _, tc := range []struct {
+		name  string
+		day   int
+		spoil func([]GridDay)
+	}{
+		{"negative precip on day 0", 0, func(ds []GridDay) { ds[0].Weather.PrecipMm[4] = -1 }},
+		{"negative wind on day 2, RH on day 3", 2, func(ds []GridDay) {
+			ds[2].Weather.WindKmh[n-1] = -1
+			ds[3].Weather.RHPct[0] = -1
+		}},
+		{"ragged day 1 before negative day 2", 1, func(ds []GridDay) {
+			ds[1].Weather.LatDeg = ds[1].Weather.LatDeg[:n-1]
+			ds[2].Weather.RHPct[0] = -1
+		}},
+		{"day 3 a different size from day 0", 3, func(ds []GridDay) {
+			w := &ds[3].Weather
+			w.TempC, w.RHPct, w.WindKmh, w.PrecipMm, w.LatDeg = w.TempC[1:], w.RHPct[1:], w.WindKmh[1:], w.PrecipMm[1:], w.LatDeg[1:]
+		}},
+	} {
+		days := daysOf(g, 4)
+		tc.spoil(days)
+		// The chain, up to the day it refuses.
+		var want error
+		yy := y
+		for _, day := range days {
+			ix, err := StepGrid(yy, day.Weather, day.Month)
+			if err != nil {
+				want = err
+				break
+			}
+			yy = ix.State()
+		}
+		var wge *GridError
+		if !errors.As(want, &wge) {
+			t.Fatalf("%s: the chain did not refuse: %v", tc.name, want)
+		}
+		for _, workers := range []int{1, 3, n + 5} {
+			got, err := StepGridDays(y, days, workers)
+			var de *DayError
+			if !errors.As(err, &de) || de.Day != tc.day || *de.Err != *wge || got != nil {
+				t.Errorf("%s, %d workers: err %v, want day %d: %v, and no output", tc.name, workers, err, tc.day, want)
+			}
+			var ge *GridError
+			if !errors.As(err, &ge) || *ge != *wge {
+				t.Errorf("%s, %d workers: errors.As does not reach the GridError: %v", tc.name, workers, err)
+			}
+			into := make([]GridIndices, len(days))
+			for d := range into {
+				into[d] = newGridIndices(n)
+			}
+			err = StepGridDaysInto(into, y, days, workers)
+			if !errors.As(err, &de) || de.Day != tc.day || *de.Err != *wge || into[0].FFMC[0] != -12345 {
+				t.Errorf("%s, %d workers: StepGridDaysInto err %v, want day %d: %v, and nothing written", tc.name, workers, err, tc.day, want)
+			}
+		}
+	}
+
+	// StepGridDaysInto's own: the count of out first, then each day's
+	// out lengths after that day's grid.
+	days := daysOf(g, 3)
+	into := []GridIndices{newGridIndices(n), newGridIndices(n)}
+	var ge *GridError
+	if err := StepGridDaysInto(into, y, days, 2); !errors.As(err, &ge) || ge.Layer != "out" {
+		t.Errorf("two outs for three days: %v", err)
+	}
+	into = append(into, newGridIndices(n))
+	into[1].BUI = into[1].BUI[:2]
+	days[2].Weather.PrecipMm[0] = -1
+	var de *DayError
+	if err := StepGridDaysInto(into, y, days, 2); !errors.As(err, &de) || de.Day != 1 || de.Err.Layer != "out.BUI" {
+		t.Errorf("short out[1].BUI before negative day 2: %v", err)
+	}
+	if de != nil && de.Error() != "fwi: day 1 of the run: output slice out.BUI differs in length from TempC" {
+		t.Errorf("DayError message: %q", de.Error())
+	}
+}
+
+// The fused serial path allocates nothing of its own.
+func TestStepGridDaysSerialAllocations(t *testing.T) {
+	g, wx, _ := gridOf()
+	n := len(wx)
+	days := daysOf(g, 3)
+	y := UniformGridState(StartupState(), n)
+	out := []GridIndices{newGridIndices(n), newGridIndices(n), newGridIndices(n)}
+	if a := testing.AllocsPerRun(20, func() { StepGridDaysInto(out, y, days, 1) }); a != 0 {
+		t.Errorf("StepGridDaysInto, 1 worker: %v allocations, want 0", a)
+	}
+	if a := testing.AllocsPerRun(20, func() { StepGridDays(y, days, 1) }); a != 1+3*7 {
+		t.Errorf("StepGridDays, 1 worker: %v allocations, want %d", a, 1+3*7)
+	}
+}
+
+// A panic in a worker reaches the caller, on the calling goroutine, once every
+// worker has stopped, with the value it was raised with; the serial path
+// panics the same. A process-killing panic would end the test binary instead.
+func TestInChunksPassesPanicsBack(t *testing.T) {
+	type boom struct{ lo, hi int }
+	for _, tc := range []struct {
+		n, workers int
+		panicAt    func(lo, hi int) bool
+	}{
+		{1000, 1, func(lo, hi int) bool { return lo <= 500 && 500 < hi }},
+		{1000, 4, func(lo, hi int) bool { return lo == 0 }},
+		{1000, 7, func(lo, hi int) bool { return lo <= 999 && 999 < hi }},
+		{1000, 24, func(lo, hi int) bool { return true }}, // every chunk
+		{3, 5, func(lo, hi int) bool { return lo == 1 }},
+	} {
+		var running, cells atomic.Int64
+		got := func() (p any) {
+			defer func() { p = recover() }()
+			inChunks(tc.n, tc.workers, func(lo, hi int) {
+				running.Add(1)
+				defer running.Add(-1)
+				if tc.panicAt(lo, hi) {
+					panic(boom{lo, hi})
+				}
+				cells.Add(int64(hi - lo))
+			})
+			return nil
+		}()
+		b, ok := got.(boom)
+		if !ok || !tc.panicAt(b.lo, b.hi) {
+			t.Errorf("n %d, %d workers: recovered %#v, want a boom from a panicking chunk", tc.n, tc.workers, got)
+		}
+		if r := running.Load(); r != 0 {
+			t.Errorf("n %d, %d workers: %d calls of f still running after the panic reached the caller", tc.n, tc.workers, r)
+		}
+		if c := cells.Load(); c >= int64(tc.n) {
+			t.Errorf("n %d, %d workers: %d cells done, want fewer than %d", tc.n, tc.workers, c, tc.n)
+		}
+	}
+
+	// A runtime error keeps its type, so the caller sees what the worker saw.
+	got := func() (p any) {
+		defer func() { p = recover() }()
+		var v []int
+		inChunks(100, 4, func(lo, hi int) { _ = v[lo] })
+		return nil
+	}()
+	if _, ok := got.(interface{ RuntimeError() }); !ok {
+		t.Errorf("index out of range came back as %#v, want a runtime.Error", got)
 	}
 }

@@ -2,6 +2,7 @@ package fbp
 
 import (
 	"math/rand"
+	"runtime"
 	"testing"
 )
 
@@ -98,26 +99,46 @@ func benchGrid(n int) Grid {
 
 var sinkGrid []Prediction
 
+// BenchmarkPredictGrid is PredictGrid at each worker count. workers=1 is the
+// serial path; 24 is every thread of the machine the numbers were taken on, and
+// runtime.NumCPU() is whatever this one has.
 func BenchmarkPredictGrid(b *testing.B) {
 	for _, n := range []int{1_000, 100_000} {
 		g := benchGrid(n)
 		b.Run(itoa(n), func(b *testing.B) {
-			b.ReportAllocs()
-			for i := 0; i < b.N; i++ {
-				out, errs, err := PredictGrid(g, GridOptions{Crown: CrownCFFDRS, PointIgnition: true})
-				if err != nil {
-					b.Fatal(err)
-				}
-				for _, e := range errs {
-					if e != nil {
-						b.Fatal(e)
+			for _, workers := range benchWorkers() {
+				b.Run("workers="+itoa(workers), func(b *testing.B) {
+					b.ReportAllocs()
+					opt := GridOptions{Crown: CrownCFFDRS, PointIgnition: true, Workers: workers}
+					for i := 0; i < b.N; i++ {
+						out, errs, err := PredictGrid(g, opt)
+						if err != nil {
+							b.Fatal(err)
+						}
+						for _, e := range errs {
+							if e != nil {
+								b.Fatal(e)
+							}
+						}
+						sinkGrid = out
 					}
-				}
-				sinkGrid = out
+					b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N*n), "ns/cell")
+				})
 			}
-			b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N*n), "ns/cell")
 		})
 	}
+}
+
+// benchWorkers is 1, 4, 12 and 24 workers, plus runtime.NumCPU() where it is
+// none of those.
+func benchWorkers() []int {
+	ws := []int{1, 4, 12, 24}
+	for _, w := range ws {
+		if w == runtime.NumCPU() {
+			return ws
+		}
+	}
+	return append(ws, runtime.NumCPU())
 }
 
 func itoa(n int) string {
@@ -143,4 +164,93 @@ func BenchmarkPredictParallel(b *testing.B) {
 		}
 		_ = p
 	})
+}
+
+// BenchmarkPredictGridInto is BenchmarkPredictGrid with one pair of output
+// buffers reused across calls, as a caller running the same grid size
+// repeatedly would: the difference is the 31 MB PredictGrid makes and zeroes
+// per call at 100k cells, serially, before any worker starts.
+func BenchmarkPredictGridInto(b *testing.B) {
+	for _, n := range []int{1_000, 100_000} {
+		g := benchGrid(n)
+		out, errs := make([]Prediction, n), make([]error, n)
+		b.Run(itoa(n), func(b *testing.B) {
+			for _, workers := range benchWorkers() {
+				b.Run("workers="+itoa(workers), func(b *testing.B) {
+					b.ReportAllocs()
+					opt := GridOptions{Crown: CrownCFFDRS, PointIgnition: true, Workers: workers}
+					for i := 0; i < b.N; i++ {
+						if err := PredictGridInto(out, errs, g, opt); err != nil {
+							b.Fatal(err)
+						}
+					}
+					b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N*n), "ns/cell")
+				})
+			}
+		})
+	}
+}
+
+// benchClusteredGrid is n cells laid out as rows of 400, the way a raster is,
+// with fuel in 50 × 50-cell patches of one fuel each rather than salted cell by
+// cell: a lake of WA over the top fifth of the rows, a strip of NF beside it,
+// and a patch fuel drawn at random for the rest. The weather layers are
+// benchGrid's. It is the case contiguous blocks are bad at: a block over the
+// lake is refused cell by cell and finishes almost at once, and a block of
+// C6 or M1/M2 costs several times a block of grass, so with one block per
+// worker the call waits for the slowest block while the others sit idle.
+func benchClusteredGrid(n int) Grid {
+	const cols, patch = 400, 50
+	g := benchGrid(n)
+	r := rand.New(rand.NewSource(2))
+	rows := (n + cols - 1) / cols
+	fuels := make([]float64, ((rows+patch-1)/patch)*(cols/patch))
+	for i := range fuels {
+		c := 1 + r.Intn(17) // as benchGrid: skip NF (13) and WA (19)
+		if c >= 13 {
+			c++
+		}
+		fuels[i] = float64(c)
+	}
+	for i := range g.Fuel {
+		row, col := i/cols, i%cols
+		switch {
+		case row < rows/5:
+			g.Fuel[i] = 19 // WA
+		case row < 2*rows/5 && col < cols/4:
+			g.Fuel[i] = 13 // NF
+		default:
+			g.Fuel[i] = fuels[(row/patch)*(cols/patch)+col/patch]
+		}
+		if g.Fuel[i] == 6 {
+			g.SlopePct[i] = 0
+		}
+	}
+	return g
+}
+
+// BenchmarkPredictGridClustered is BenchmarkPredictGridInto over
+// benchClusteredGrid: the same work as the random grid, unevenly spread. Only
+// NF and WA may be refused.
+func BenchmarkPredictGridClustered(b *testing.B) {
+	const n = 100_000
+	g := benchClusteredGrid(n)
+	out, errs := make([]Prediction, n), make([]error, n)
+	for _, workers := range benchWorkers() {
+		b.Run("workers="+itoa(workers), func(b *testing.B) {
+			b.ReportAllocs()
+			opt := GridOptions{Crown: CrownCFFDRS, PointIgnition: true, Workers: workers}
+			for i := 0; i < b.N; i++ {
+				if err := PredictGridInto(out, errs, g, opt); err != nil {
+					b.Fatal(err)
+				}
+			}
+			b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N*n), "ns/cell")
+			for i, e := range errs {
+				if e != nil && g.Fuel[i] != 13 && g.Fuel[i] != 19 {
+					b.Fatalf("cell %d, fuel %v: %v", i, g.Fuel[i], e)
+				}
+			}
+		})
+	}
 }

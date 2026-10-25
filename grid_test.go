@@ -4,6 +4,7 @@ import (
 	"errors"
 	"math"
 	"reflect"
+	"sync/atomic"
 	"testing"
 )
 
@@ -241,5 +242,217 @@ func TestPredictGridLayerLengths(t *testing.T) {
 	_, errs, _ = PredictGrid(gridOf(), GridOptions{})
 	if !errors.Is(errs[0], ErrCrownUnset) {
 		t.Errorf("CrownUnset: err = %v", errs[0])
+	}
+}
+
+// Workers changes who computes a cell and nothing else: every number to the
+// bit, every error, every cell in its place, for counts that divide the grid,
+// do not, exceed it, and for no cells at all.
+func TestPredictGridWorkersIsBitIdentical(t *testing.T) {
+	big := benchGrid(257)
+	for i := 0; i < len(big.Fuel); i += 17 {
+		big.Fuel[i] = []float64{0, 13, 19, 7.5}[i%4] // refused codes and non-fuels
+	}
+	big.FFMC[40] = math.NaN()
+	big.SlopePct[41], big.Fuel[41] = 30, 6 // C6 on a slope
+	for _, tc := range []struct {
+		name string
+		g    Grid
+	}{{"gridOf", gridOf()}, {"257 cells", big}, {"empty", Grid{}}} {
+		opt := GridOptions{Crown: CrownCFFDRS, PointIgnition: true}
+		want, wantErrs, err := PredictGrid(tc.g, opt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		refused := 0
+		for _, e := range wantErrs {
+			if e != nil {
+				refused++
+			}
+		}
+		if tc.name != "empty" && refused == 0 {
+			t.Fatalf("%s: no refused cell to check", tc.name)
+		}
+		// One pair of buffers for every PredictGridInto call below, dirtied
+		// before each, so a cell it fails to write shows.
+		bufOut, bufErrs := make([]Prediction, len(want)), make([]error, len(want))
+		for _, workers := range []int{-1, 0, 1, 2, 3, 7, len(tc.g.Fuel) + 5, 1000} {
+			opt.Workers = workers
+			got, errs, err := PredictGrid(tc.g, opt)
+			if err != nil {
+				t.Fatalf("%s, %d workers: %v", tc.name, workers, err)
+			}
+			checkSameAsSerial(t, tc.name+", PredictGrid", workers, got, errs, want, wantErrs)
+			for i := range bufOut {
+				bufOut[i], bufErrs[i] = Prediction{ROS: 7, FD: ContinuousCrown}, ErrGridFuelCode
+			}
+			if err := PredictGridInto(bufOut, bufErrs, tc.g, opt); err != nil {
+				t.Fatalf("%s, %d workers: PredictGridInto: %v", tc.name, workers, err)
+			}
+			checkSameAsSerial(t, tc.name+", PredictGridInto", workers, bufOut, bufErrs, want, wantErrs)
+		}
+	}
+}
+
+// checkSameAsSerial is got and errs against the serial run, cell by cell.
+func checkSameAsSerial(t *testing.T, name string, workers int, got []Prediction, errs []error, want []Prediction, wantErrs []error) {
+	t.Helper()
+	if len(got) != len(want) || len(errs) != len(wantErrs) {
+		t.Fatalf("%s, %d workers: %d cells, want %d", name, workers, len(got), len(want))
+	}
+	for i := range want {
+		if !sameBits(got[i], want[i]) {
+			t.Errorf("%s, %d workers: cell %d differs from serial:\n%+v\n%+v", name, workers, i, got[i], want[i])
+		}
+		if (errs[i] == nil) != (wantErrs[i] == nil) ||
+			errs[i] != nil && (errs[i].Error() != wantErrs[i].Error() || reflect.TypeOf(errs[i]) != reflect.TypeOf(wantErrs[i])) {
+			t.Errorf("%s, %d workers: cell %d err %v, serial %v", name, workers, i, errs[i], wantErrs[i])
+		}
+	}
+}
+
+// PredictGridInto refuses a layer first, then out, then errs, and writes
+// nothing when it does.
+func TestPredictGridIntoRefusesLengths(t *testing.T) {
+	g := gridOf()
+	n := len(g.Fuel)
+	for _, tc := range []struct {
+		name  string
+		g     Grid
+		out   []Prediction
+		errs  []error
+		layer string
+	}{
+		{"short layer before short out", Grid{Fuel: g.Fuel, BUI: g.BUI[:2]}, make([]Prediction, n-1), make([]error, n), "BUI"},
+		{"short out", g, make([]Prediction, n-1), make([]error, n), "out"},
+		{"long out", g, make([]Prediction, n+1), make([]error, n), "out"},
+		{"short errs", g, make([]Prediction, n), make([]error, n-1), "errs"},
+		{"nil out", g, nil, make([]error, n), "out"},
+	} {
+		for _, workers := range []int{1, 3} {
+			for i := range tc.out {
+				tc.out[i].ROS = 7
+			}
+			err := PredictGridInto(tc.out, tc.errs, tc.g, GridOptions{Crown: CrownCFFDRS, Workers: workers})
+			var ge *GridError
+			if !errors.As(err, &ge) || ge.Layer != tc.layer {
+				t.Errorf("%s, %d workers: err %v, want a GridError on %s", tc.name, workers, err, tc.layer)
+			}
+			for i := range tc.out {
+				if tc.out[i].ROS != 7 || tc.errs != nil && i < len(tc.errs) && tc.errs[i] != nil {
+					t.Fatalf("%s, %d workers: cell %d written by a refused call", tc.name, workers, i)
+				}
+			}
+		}
+	}
+	if err := PredictGridInto(nil, nil, Grid{}, GridOptions{Workers: 4}); err != nil {
+		t.Errorf("empty grid into nil slices: %v", err)
+	}
+}
+
+// sameBits is a == b field by field, comparing float64s by their bits so that
+// NaN equals NaN and -0 does not equal 0.
+func sameBits(a, b Prediction) bool {
+	va, vb := reflect.ValueOf(a), reflect.ValueOf(b)
+	for j := 0; j < va.NumField(); j++ {
+		fa, fb := va.Field(j), vb.Field(j)
+		if fa.Kind() == reflect.Float64 {
+			if math.Float64bits(fa.Float()) != math.Float64bits(fb.Float()) {
+				return false
+			}
+		} else if fa.Interface() != fb.Interface() {
+			return false
+		}
+	}
+	return true
+}
+
+// The serial path allocates what it returns and nothing else: PredictGrid its
+// two slices, PredictGridInto nothing.
+func TestPredictGridSerialAllocations(t *testing.T) {
+	g := benchGrid(64)
+	opt := GridOptions{Crown: CrownCFFDRS, PointIgnition: true, Workers: 1}
+	out, errs := make([]Prediction, 64), make([]error, 64)
+	if a := testing.AllocsPerRun(20, func() { PredictGrid(g, opt) }); a != 2 {
+		t.Errorf("PredictGrid, 1 worker: %v allocations, want 2", a)
+	}
+	if a := testing.AllocsPerRun(20, func() { PredictGridInto(out, errs, g, opt) }); a != 0 {
+		t.Errorf("PredictGridInto, 1 worker: %v allocations, want 0", a)
+	}
+}
+
+// inChunks hands every cell to f exactly once, in chunks that tile [0, n),
+// whatever the worker count.
+func TestInChunksCoversEveryCellOnce(t *testing.T) {
+	for _, n := range []int{0, 1, 2, 3, 7, 64, 1000, 1001} {
+		for _, workers := range []int{-1, 0, 1, 2, 3, 7, n + 5} {
+			seen := make([]int32, n)
+			inChunks(n, workers, func(lo, hi int) {
+				if lo > hi || lo < 0 || hi > n {
+					t.Errorf("n %d, %d workers: chunk [%d, %d)", n, workers, lo, hi)
+					return
+				}
+				for i := lo; i < hi; i++ {
+					atomic.AddInt32(&seen[i], 1)
+				}
+			})
+			for i, c := range seen {
+				if c != 1 {
+					t.Fatalf("n %d, %d workers: cell %d seen %d times", n, workers, i, c)
+				}
+			}
+		}
+	}
+}
+
+// A panic in a worker reaches the caller, on the calling goroutine, once every
+// worker has stopped, with the value it was raised with; the serial path
+// panics the same. A process-killing panic would end the test binary instead.
+func TestInChunksPassesPanicsBack(t *testing.T) {
+	type boom struct{ lo, hi int }
+	for _, tc := range []struct {
+		n, workers int
+		panicAt    func(lo, hi int) bool
+	}{
+		{1000, 1, func(lo, hi int) bool { return lo <= 500 && 500 < hi }},
+		{1000, 4, func(lo, hi int) bool { return lo == 0 }},
+		{1000, 7, func(lo, hi int) bool { return lo <= 999 && 999 < hi }},
+		{1000, 24, func(lo, hi int) bool { return true }}, // every chunk
+		{3, 5, func(lo, hi int) bool { return lo == 1 }},
+	} {
+		var running, cells atomic.Int64
+		got := func() (p any) {
+			defer func() { p = recover() }()
+			inChunks(tc.n, tc.workers, func(lo, hi int) {
+				running.Add(1)
+				defer running.Add(-1)
+				if tc.panicAt(lo, hi) {
+					panic(boom{lo, hi})
+				}
+				cells.Add(int64(hi - lo))
+			})
+			return nil
+		}()
+		b, ok := got.(boom)
+		if !ok || !tc.panicAt(b.lo, b.hi) {
+			t.Errorf("n %d, %d workers: recovered %#v, want a boom from a panicking chunk", tc.n, tc.workers, got)
+		}
+		if r := running.Load(); r != 0 {
+			t.Errorf("n %d, %d workers: %d calls of f still running after the panic reached the caller", tc.n, tc.workers, r)
+		}
+		if c := cells.Load(); c >= int64(tc.n) {
+			t.Errorf("n %d, %d workers: %d cells done, want fewer than %d", tc.n, tc.workers, c, tc.n)
+		}
+	}
+
+	// A runtime error keeps its type, so the caller sees what the worker saw.
+	got := func() (p any) {
+		defer func() { p = recover() }()
+		var v []int
+		inChunks(100, 4, func(lo, hi int) { _ = v[lo] })
+		return nil
+	}()
+	if _, ok := got.(interface{ RuntimeError() }); !ok {
+		t.Errorf("index out of range came back as %#v, want a runtime.Error", got)
 	}
 }
