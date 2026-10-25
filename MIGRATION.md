@@ -49,6 +49,22 @@ Each is written up in full in the row named.
 - **`fbp()`'s ISI override and BUIEFF switch.** Not supported: `Predict` always
   computes ISI from FFMC and the net effective wind, and always applies the
   buildup effect. See `fire_behaviour_prediction.r`.
+- **NF and WA.** cffdrs returns all zeros for them; `Predict` and `PredictGrid`
+  refuse them with `ErrUnknownFuel`, because a zero rate cannot be told apart
+  from a computed calm-weather zero. See `fbpRaster.r`.
+- **Fuel codes outside 1-19 in a grid.** fbpRaster() runs an unknown or NA code
+  as C2; `PredictGrid` refuses it with `ErrGridFuelCode`. See `fbpRaster.r`.
+- **NA layers in a grid.** fbpRaster() fills fbp()'s default in for an NA
+  input; `PredictGrid` refuses a cell whose NA it cannot stand for, and
+  otherwise gives cffdrs' answer. See `fbpRaster.r`.
+- **The all-NA grid cell.** fbpRaster() drops it and shifts every later cell's
+  answer by one; `PredictGrid` refuses that cell and moves no other. See
+  `fbpRaster.r`.
+
+Each of these is an entry in `testdata/divergences.json`, which says what is
+correct in each case and on what authority, and which the `TestCFFDRS*` tests
+read instead of excluding rows by name. `TestDivergenceRegisterMatchesTheRepository`
+fails if this list and the register stop naming the same gaps.
 
 ## Pins
 
@@ -57,7 +73,7 @@ Each is written up in full in the row named.
 | Upstream commit last read | `4d20a30` (2026-05-11) | 2026-10-25 |
 | Upstream package version | 1.10.0 | 2026-10-25 |
 | Oracle pins (`testdata/Dockerfile`) | cffdrs 1.9.2, R 4.6.1 | 2026-10-25 |
-| Fixture sha256 | `90e34d9e…24bf7` (`testdata/README.md`) | 2026-10-25 |
+| Fixture sha256 | `2fbf2edc…32ee1` (`testdata/README.md`) | 2026-10-25 |
 
 > **Open drift — re-measured 2026-09-18, and it is not what this note used to
 > say.** The oracle pins cffdrs 1.9.2 because **1.9.2 is CRAN's current release**.
@@ -260,6 +276,7 @@ gap in the dates is visible as a gap.
 
 | Date | Upstream commit | What changed |
 |---|---|---|
+| 2026-10-25 | `4d20a30` | **Divergence register added; no row moved status** (maintainer's request, not an audit; upstream pins carried). `testdata/divergences.json` records every place gofbp deliberately departs from cffdrs, with scope, verdict, what is correct and on what authority; `internal/oracle` reads it. `TestCFFDRSPredict`, `TestCFFDRSPredictGrid` and `TestCFFDRSSlopeBackSolve` consult it instead of excluding by name; `TestCFFDRSDivergences` and `TestDivergenceRegisterMatchesTheRepository` are new. Generator gained a `theta_cases` section of 600 rows — cffdrs' TROS and `rate_of_spread_at_theta()`, recorded because they are wrong. Regenerated in the pinned container: **digest `90e34d9e…24bf7` → `2fbf2edc…32ee1`; `tools/fixture-diff`: *No column shared by both fixtures moved*, exit 0.** Both defects measured, not assumed: cffdrs matches the register's signatures to 1.5e-15, and `ROSAtAngle` matches the published eq. 94 to 1.6e-14 on the same rows. Four gaps the register knew and this file did not were added to the known gaps (NF/WA, out-of-range grid codes, NA layers, the all-NA cell). **Status call, decided by the maintainer:** `rate_of_spread_at_theta.r` stays 🟢. The fixture now carries cffdrs' values for it, but they are wrong, so there is still no *correct* oracle column; `TestCFFDRSDivergences`' `ledger:` marker names the ✅ `fire_behaviour_prediction.r` (the TROS half) and not this row. |
 | 2026-10-25 | `4d20a30` | **`fbpRaster.r` 🔴 → ✅** (a `/migration-port` run from the port Ralph loop, not an audit; no drift check, so the upstream pins are carried from this morning's measurement, not re-measured). `grid.go` adds `PredictGrid` over plain per-layer slices, `Predict` per cell; `math` is still the only import. Oracle case (b): a `fbpRaster()` block in the generator, 188 cells in a new `fbp_grid_cases` section, and `tools/fixture-diff` taught to compare it. Regenerated in the pinned container (cffdrs 1.9.2, R 4.6.1): **digest `fdd18b63…7679bd0` → `90e34d9e…24bf7`; `tools/fixture-diff` over the `fdd18b63` copy: *No column shared by both fixtures moved*, exit 0** — 24,953 distinct FBP cases and 16,951 distinct FWI cases shared and unchanged, `fbp_grid_cases` a new section of 188. The FBP count is still 25,097. `TestCFFDRSPredictGrid`: 126 computed cells at worst relative error 1.14e-13, 62 refused cells each for its named reason. **Found, and not in the row's 2026-10-25 reading:** `fbp()` substitutes for a bad code (C2) and for every NA layer, where `fwiRaster()` let NA flow — refused here as `Predict` refuses every substitution; and a cell NA in every layer makes `fbpRaster()` shift every later cell by one, a defect not reproduced. The dependency order is empty: **Nothing is owed.** |
 | 2026-10-25 | `4d20a30` | **`fwiRaster.r` 🔴 → ✅** (a `/migration-port` run from the raster Ralph loop, not an audit; no drift check, so the upstream pins are carried from this morning's measurement, not re-measured). `fwi/grid.go` adds `StepGrid` over plain per-layer slices, sharing `Step`'s body; `math` is still the only import, and `GridError` is the package's own type because `errors` is not allowed. Oracle case (b): a `fwiRaster()` block in the generator, 2,270 grid cells under `fwi_cases` as `kind = "grid"`. Regenerated in the pinned container (cffdrs 1.9.2, R 4.6.1): **digest `8de2446c…6c6511` → `fdd18b63…7679bd0`; `tools/fixture-diff` over the `8de2446c` copy: *No column shared by both fixtures moved*, exit 0** — 24,953 distinct FBP cases shared and unchanged, 14,681 distinct FWI cases shared and unchanged, 2,270 only-in-new, nothing only-in-old. The FBP count is still 25,097. `TestCFFDRSStepGrid`: every cell, worst relative error 3.43e-15, 41 NA outputs asserted as NaN. **Found, and not in the row's 2026-10-25 reading:** an NA cell propagates per output instead of poisoning the cell (so the grid could not just call `Step`), and `out = "all"` writes RH ≥ 100 back as exactly 100. Next on the list: `fbpRaster.r`. |
 | 2026-10-25 | `4d20a30` | **Re-scope, decided by the maintainer, not by an audit.** The raster-wrapper row was ⚪ "gridding is the caller's". It is now split: `fwiRaster.r` and `fbpRaster.r` are 🔴 and in scope, and `gfmcRaster.R`/`hffmcRaster.r` stay ⚪ because what they wrap is ⚪. Both wrappers were read at the pin. Neither adds an equation, the pinned container already has terra (cffdrs imports it) so the oracle can call them, and the package's `math`-only rule stands: the Go loops over plain slices, and parallelism stays with the caller. The dependency order lists both, FWI first on cost. No Go written, no generator change, no regeneration, no drift check (pins not re-dated; the line below measured them today). |

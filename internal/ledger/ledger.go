@@ -111,6 +111,10 @@ type Ledger struct {
 	// work from the head of this list.
 	DependencyOrder []string
 
+	// KnownGaps are the bullets of "Known gaps inside ✅ rows", each of which
+	// testdata/divergences.json has to describe — see parseKnownGaps.
+	KnownGaps []KnownGap
+
 	Lines []string
 }
 
@@ -154,6 +158,9 @@ func Load(path string) (*Ledger, error) {
 		return nil, err
 	}
 	if err := l.parseDependencyOrder(); err != nil {
+		return nil, err
+	}
+	if err := l.parseKnownGaps(); err != nil {
 		return nil, err
 	}
 	return l, nil
@@ -399,6 +406,46 @@ func (l *Ledger) parseDependencyOrder() error {
 	if len(l.DependencyOrder) == 0 && !l.sectionSays(start, NothingOwed) {
 		return fmt.Errorf("%s: the dependency order names no upstream files. Each item has to "+
 			"name the file its row is keyed on, or nothing can join this list to the table", l.Path)
+	}
+	return nil
+}
+
+// KnownGap is one bullet of "Known gaps inside ✅ rows": a place where a row
+// is ported and oracle-asserted and gofbp still does not give cffdrs' answer.
+// Title is the bullet's bold lead with its closing full stop dropped, which is
+// what testdata/divergences.json names in each entry's "gap".
+type KnownGap struct {
+	Title string
+	Line  int
+}
+
+const knownGapsHeading = "### Known gaps inside ✅ rows"
+
+var gapBullet = regexp.MustCompile(`^- \*\*(.+?)\*\*`)
+
+func (l *Ledger) parseKnownGaps() error {
+	start := -1
+	for i, line := range l.Lines {
+		if strings.TrimSpace(line) == knownGapsHeading {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		return fmt.Errorf("%s: the %q section is gone", l.Path, knownGapsHeading)
+	}
+	for i := start + 1; i < len(l.Lines); i++ {
+		t := strings.TrimSpace(l.Lines[i])
+		if strings.HasPrefix(t, "## ") || strings.HasPrefix(t, "### ") {
+			break
+		}
+		if m := gapBullet.FindStringSubmatch(l.Lines[i]); m != nil {
+			l.KnownGaps = append(l.KnownGaps, KnownGap{Title: strings.TrimSuffix(m[1], "."), Line: i + 1})
+		}
+	}
+	if len(l.KnownGaps) == 0 {
+		return fmt.Errorf("%s: %q lists no gaps. Say so in words if there are none, "+
+			"and change this parser with it", l.Path, knownGapsHeading)
 	}
 	return nil
 }

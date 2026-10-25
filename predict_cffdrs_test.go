@@ -23,12 +23,16 @@ import (
 // FMC comes from a Site, because the fixture sends none and fbp() computes it.
 // The grass fuel load is passed as the 0.35 the generator sends.
 //
-// C6 on a slope is the one exclusion, and it is asserted rather than skipped:
-// Predict must refuse it with ErrC6OnSlope (see predict.go).
+// A row testdata/divergences.json covers is held to its entry instead: today
+// that is C6 on a slope, which Predict must refuse with the entry's error
+// (ErrC6OnSlope, see predict.go). A row no entry covers must be computed and
+// must match, so a refusal or a disagreement the register does not know about
+// fails here.
 //
 // ledger: fire_behaviour_prediction.r
 func TestCFFDRSPredict(t *testing.T) {
 	f := loadCFFDRS(t)
+	reg := loadRegister(t)
 	const tol = 1e-9
 
 	emitted := false
@@ -53,15 +57,15 @@ func TestCFFDRSPredict(t *testing.T) {
 	for i, c := range f.Cases {
 		fuel := ourFuel(c.Fuel)
 		p, err := Predict(inputFromCase(c))
-		if fuel == "C6" && c.GS > 0 {
-			if !errors.Is(err, ErrC6OnSlope) {
-				t.Errorf("case %d C6 gs=%v: err = %v, want ErrC6OnSlope", i, c.GS, err)
+		if d := reg.Find("cases", caseGetter(c), "*"); d != nil {
+			if want := sentinelErrors[d.Error]; !errors.Is(err, want) {
+				t.Errorf("case %d %s gs=%v: err = %v, want %v (divergence %s)", i, c.Fuel, c.GS, err, want, d.ID)
 			}
 			refused++
 			continue
 		}
 		if err != nil {
-			t.Errorf("case %d %s: %v", i, c.Fuel, err)
+			t.Errorf("case %d %s: %v, and no entry in %s explains the refusal", i, c.Fuel, err, registerPath)
 			continue
 		}
 		perFuel[fuel]++
@@ -119,12 +123,12 @@ func TestCFFDRSPredict(t *testing.T) {
 	for _, v := range perFuel {
 		n += v
 	}
-	t.Logf("Predict %d rows end to end, %d C6-on-slope rows refused, %d fuels", n, refused, len(perFuel))
+	t.Logf("Predict %d rows end to end, %d refused as the register says, %d fuels", n, refused, len(perFuel))
 	if len(perFuel) < len(Fuels) {
 		t.Errorf("only %d of %d fuels reached", len(perFuel), len(Fuels))
 	}
 	if refused == 0 {
-		t.Error("no C6 row on a slope — ErrC6OnSlope is unasserted against the sweep")
+		t.Error("no row the register covers was reached — its refusals are unasserted against the sweep")
 	}
 }
 
