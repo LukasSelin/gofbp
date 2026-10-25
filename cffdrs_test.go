@@ -140,6 +140,9 @@ type cffdrsFixture struct {
 	CFFDRSVersion string       `json:"cffdrs_version"`
 	RVersion      string       `json:"r_version"`
 	Cases         []cffdrsCase `json:"cases"`
+	// FBPGrid is fbpRaster()'s section, read by grid_cffdrs_test.go. Absent
+	// from every fixture older than the fbpRaster() block.
+	FBPGrid []fbpGridCase `json:"fbp_grid_cases"`
 }
 
 // ourFuel maps a cffdrs fuel name onto this package's key. cffdrs spells the

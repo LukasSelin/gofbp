@@ -1050,6 +1050,124 @@ for (lay in c("prec", "ws", "rh")) {
     stop("fwiRaster() did not refuse a negative ", lay, " cell")
 }
 
+# --- fbpRaster() ---
+# fbpRaster() is fbp() over a terra grid. It adds no equation: it maps the
+# numeric FUEL layer through codes 1-19 -- the sort()ed names C-1..C-7, D-1,
+# M-1..M-4, NF, O-1a, O-1b, S-1..S-3, WA, so NF is 13 and WA 19 -- runs fbp() on
+# the cells, rewrites FD S/I/C as 1/2/3, and hands the selected outputs back as
+# layers. Go's PredictGrid claims to be that, cell for cell. Each grid is its own
+# "grid" and each cell its own "cell", numbered in terra's cell order
+# (row-major), and every layer fbp() reads is sent, so no row leans on one of
+# fbp()'s missing-column defaults.
+#
+#   fbpgrid-wNsM  23 fuel columns -- the 19 codes, then 0, 20, 7.5 and NA --
+#                 under three weathers (N) on flat ground and on a 40% slope
+#                 (M), CBH/CFL sent as -1 and FMC as 0, so the per-fuel tables
+#                 and the site's FMC are what fbp() uses
+#   fbpgrid-explicit  the same 23 columns with CBH, CFL and FMC given, a point
+#                 ignition and 30 minutes elapsed (ACCEL is one value per grid
+#                 here because PredictGrid takes it as one)
+#   fbpgrid-na    a C-2 cell, then that cell with each layer NA in turn
+#
+# What the codes outside 1-19 and the NA cells do was read off the oracle, not
+# guessed: fbp() SUBSTITUTES. An unknown or NA code becomes C-2 (match() gives NA,
+# and fbp() fills a missing FuelType with C2 and a warning), and an NA in any
+# other layer gets fbp()'s default for it. NF and WA come back as all zeros with
+# FD NA. Those rows are recorded as cffdrs answered them -- the Go side refuses
+# every one of them, as Predict refuses every substitution -- and NA outputs are
+# emitted as null.
+#
+# One more behaviour is checked here rather than recorded, because there is
+# nothing correct to record: a cell that is NA in EVERY layer is dropped by
+# as.data.table(), and fbpRaster() then assigns fbp()'s shorter result back to
+# the grid by position, so every later cell takes the next cell's answer and the
+# last cell takes cell 1's (terra warns "values were recycled").
+fbp_grid_rows <- list()
+FG_FUELS <- sort(c(paste("C", 1:7, sep = "-"), "D-1", paste("M", 1:4, sep = "-"),
+                   paste("S", 1:3, sep = "-"), "O-1a", "O-1b", "WA", "NF"))
+if (!identical(match(c("NF", "WA"), FG_FUELS), c(13L, 19L))) stop("fbpRaster code table moved")
+FG_CODES <- c(1:19, 0, 20, 7.5, NA)
+FG_IN <- c("FUEL", "LAT", "LONG", "ELV", "FFMC", "BUI", "WS", "WD", "GS", "DJ", "ASPECT",
+           "PC", "PDF", "GFL", "CC", "CBH", "CFL", "FMC", "D0", "SD", "SH", "HR",
+           "ACCEL", "THETA", "ISI", "BUIEFF")
+FG_OUT <- c("CFB", "CFC", "FD", "HFI", "RAZ", "ROS", "SFC", "TFC", "BE", "SF", "ISI",
+            "FFMC", "FMC", "D0", "RSO", "CSI", "FROS", "BROS", "HROSt", "FROSt", "BROSt",
+            "FCFB", "BCFB", "FFI", "BFI", "FTFC", "BTFC", "TI", "FTI", "BTI", "LB", "LBt",
+            "WSV", "DH", "DB", "DF")
+fg_values <- function(w, nr) {
+  r <- do.call(c, lapply(FG_IN, function(l) grid_layer(w[[l]], nr)))
+  names(r) <- FG_IN
+  o <- suppressWarnings(suppressMessages(fbpRaster(r, output = "All")))
+  v <- terra::values(o)
+  if (nrow(v) != nrow(w)) stop("fbpRaster() returned ", nrow(v), " cells for ", nrow(w))
+  if (length(setdiff(FG_OUT, colnames(v))))
+    stop("fbpRaster() did not return: ", paste(setdiff(FG_OUT, colnames(v)), collapse = ", "))
+  v
+}
+run_fbp_grid <- function(id, w, nr) {
+  rownames(w) <- NULL
+  v <- fg_values(w, nr)
+  g <- data.frame(grid = id, cell = seq_len(nrow(w)), stringsAsFactors = FALSE)
+  # FUEL is fuel_code here, not fuel: precheck and regen-cffdrs.sh count the FBP
+  # cases as the "fuel" keys in the file, and these cells are not those cases.
+  for (l in FG_IN) {
+    name <- if (l == "FUEL") "fuel_code" else if (l %in% FG_OUT) paste0(tolower(l), "_in") else tolower(l)
+    g[[name]] <- w[[l]]
+  }
+  for (l in FG_OUT) g[[tolower(l)]] <- v[, l]
+  for (col in names(g)) if (is.double(g[[col]])) g[[col]][is.na(g[[col]])] <- NaN
+  fbp_grid_rows[[length(fbp_grid_rows) + 1]] <<- g
+}
+fg_cell <- function(...) {
+  d <- list(FUEL = 2, LAT = 50, LONG = -110, ELV = 0, FFMC = 90, BUI = 60, WS = 15,
+            WD = 0, GS = 0, DJ = 180, ASPECT = 0, PC = 60, PDF = 50, GFL = 0.35,
+            CC = 85, CBH = -1, CFL = -1, FMC = 0, D0 = 0, SD = 0, SH = 0, HR = 1,
+            ACCEL = 0, THETA = 0, ISI = 0, BUIEFF = 1)
+  a <- list(...)
+  d[names(a)] <- a
+  as.data.frame(d)
+}
+fg_columns <- function(...) do.call(rbind, lapply(FG_CODES, function(code) fg_cell(FUEL = code, ...)))
+
+FG_WEATHER <- list(list(FFMC = 85, BUI = 30, WS = 5, DJ = 150, ELV = 0),
+                   list(FFMC = 90, BUI = 60, WS = 15, DJ = 200, ELV = 1200),
+                   list(FFMC = 94, BUI = 120, WS = 35, DJ = 230, ELV = 400))
+for (wi in seq_along(FG_WEATHER)) {
+  for (si in 1:2) {
+    slope <- if (si == 1) list(GS = 0, ASPECT = 0, WD = 0) else list(GS = 40, ASPECT = 135, WD = 270)
+    run_fbp_grid(sprintf("fbpgrid-w%ds%d", wi, si),
+                 do.call(fg_columns, c(FG_WEATHER[[wi]], slope)), nr = 1)
+  }
+}
+run_fbp_grid("fbpgrid-explicit",
+             fg_columns(FFMC = 93, BUI = 90, WS = 25, GS = 15, ASPECT = 200, WD = 45,
+                        CBH = 4, CFL = 1.2, FMC = 95, HR = 0.5, ACCEL = 1), nr = 1)
+gna <- fg_cell(GS = 20, ASPECT = 30, WD = 100)[rep(1, length(FG_IN) + 1), ]
+for (i in seq_along(FG_IN)) gna[i + 1, FG_IN[i]] <- NA
+run_fbp_grid("fbpgrid-na", gna, nr = 1)
+
+# The all-NA cell: the shift described above, asserted so that a cffdrs that
+# fixes it fails here rather than quietly changing what the Go side departs from.
+ws_ramp <- do.call(rbind, lapply(c(5, 10, 15, 20, 25), function(ws) fg_cell(WS = ws)))
+clean <- fg_values(ws_ramp, nr = 1)[, "ROS"]
+holed <- ws_ramp
+holed[2, ] <- NA
+shifted <- fg_values(holed, nr = 1)[, "ROS"]
+if (!isTRUE(all.equal(unname(shifted), unname(clean[c(1, 3, 4, 5, 1)]))))
+  stop("fbpRaster() no longer shifts the cells after an all-NA cell; ",
+       "update this block and PredictGrid's doc comment together")
+
+FG <- do.call(rbind, fbp_grid_rows)
+fg_json <- function(i) {
+  parts <- character(0)
+  for (col in names(FG)) {
+    v <- FG[[col]][i]
+    parts <- c(parts, paste0('"', col, '": ', if (is.character(v)) q(v) else num(v)))
+  }
+  paste0('  {', paste(parts, collapse = ", "), '}')
+}
+fbp_grid_body <- paste(vapply(seq_len(nrow(FG)), fg_json, character(1)), collapse = ",\n")
+
 FW <- do.call(rbind, fwi_rows)
 # Every row must have produced the output its kind is about. A non-finite one is
 # not skipped -- it is emitted as null and the Go side fails on it -- but it is
@@ -1085,7 +1203,8 @@ json <- paste0(
   ' "cffdrs_version": ', q(as.character(packageVersion("cffdrs"))), ',\n',
   ' "r_version": ', q(R.version.string), ',\n',
   ' "cases": [\n', body, '\n ],\n',
-  ' "fwi_cases": [\n', fwi_body, '\n ]\n}\n'
+  ' "fwi_cases": [\n', fwi_body, '\n ],\n',
+  ' "fbp_grid_cases": [\n', fbp_grid_body, '\n ]\n}\n'
 )
 
 dir.create(dirname(OUT), recursive = TRUE, showWarnings = FALSE)
@@ -1100,3 +1219,5 @@ cat(sprintf("  fire descriptions: S %d, I %d, C %d\n",
             sum(out$FD == "S"), sum(out$FD == "I"), sum(out$FD == "C")))
 cat(sprintf("wrote %d FWI System cases (fwi_cases):\n", nrow(FW)))
 for (k in unique(FW$kind)) cat(sprintf("  %-9s %d\n", k, sum(FW$kind == k)))
+cat(sprintf("wrote %d fbpRaster() cells (fbp_grid_cases) in %d grids\n",
+            nrow(FG), length(unique(FG$grid))))

@@ -316,6 +316,34 @@ func TestAMovedFWINumberIsCaught(t *testing.T) {
 	}
 }
 
+// fbpRaster()'s section is compared like the FWI one: a new section is not a
+// move, and a moved cell is named with its section and fails the exit status.
+// Two cells of one grid with the same layers differ only by cell, so this also
+// checks cell is part of the key.
+func TestTheFBPGridSectionIsCompared(t *testing.T) {
+	cell := func(n float64, ros any) map[string]any {
+		return map[string]any{"grid": "g", "cell": n, "fuel_code": 2.0, "ffmc_in": 90.0, "ros": ros}
+	}
+	oldFx := mk("old", "1.9.2", kase("C1", 90, 40, map[string]any{"ros": 5.0}))
+	newFx := mk("new", "1.9.2", kase("C1", 90, 40, map[string]any{"ros": 5.0}))
+	newFx.FBPGridCases = []map[string]any{cell(1, 9.0), cell(2, 9.0)}
+	if rep := compare(oldFx, newFx, 0, 3); rep.anyMoved() || rep.FBPGrid == nil || !rep.FBPGrid.NewSection {
+		t.Fatalf("a new fbp_grid_cases section: %+v", rep.FBPGrid)
+	}
+
+	oldFx.FBPGridCases = []map[string]any{cell(1, 9.0), cell(2, 9.0)}
+	newFx.FBPGridCases = []map[string]any{cell(1, 9.0), cell(2, nil)}
+	rep := compare(oldFx, newFx, 0, 3)
+	if !rep.anyMoved() || rep.FBPGrid == nil || rep.FBPGrid.AmbiguousOld != 0 {
+		t.Fatalf("an fbp_grid_cases move was not reported cleanly: %+v", rep.FBPGrid)
+	}
+	var sb strings.Builder
+	printReport(&sb, rep)
+	if !strings.Contains(sb.String(), "MOVED: fbp_grid_cases.ros") {
+		t.Errorf("the move is not named with its section:\n%s", sb.String())
+	}
+}
+
 // A regeneration that dropped the FWI block is a lost assertion, and a lost
 // assertion is a move.
 func TestADroppedFWISectionIsAMove(t *testing.T) {

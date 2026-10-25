@@ -1,0 +1,267 @@
+package fbp
+
+import (
+	"encoding/json"
+	"errors"
+	"math"
+	"sort"
+	"testing"
+)
+
+// fbpGridCase is one cell of the fixture's fbp_grid_cases: the grid it belongs
+// to, its place in terra's cell order, and every other column by name. A null
+// is NA — the grid block emits every column on every row, so null never means
+// "not emitted" — and reads back as NaN.
+type fbpGridCase struct {
+	Grid string
+	Cell int
+	v    map[string]*float64
+}
+
+func (c *fbpGridCase) UnmarshalJSON(b []byte) error {
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		return err
+	}
+	c.v = map[string]*float64{}
+	for k, x := range m {
+		switch k {
+		case "grid":
+			c.Grid, _ = x.(string)
+		case "cell":
+			f, _ := x.(float64)
+			c.Cell = int(f)
+		default:
+			if f, ok := x.(float64); ok {
+				c.v[k] = &f
+			} else {
+				c.v[k] = nil
+			}
+		}
+	}
+	return nil
+}
+
+// f is column k, NaN for NA. A column the row does not carry is NaN too, and
+// TestCFFDRSPredictGrid checks every column it reads is present first.
+func (c fbpGridCase) f(k string) float64 {
+	if p := c.v[k]; p != nil {
+		return *p
+	}
+	return math.NaN()
+}
+
+// fbpGridInputs are the layers the generator sends fbpRaster(), as named in the
+// fixture (an input that is also an output carries _in).
+var fbpGridInputs = []string{
+	"fuel_code", "lat", "long", "elv", "ffmc_in", "bui", "ws", "wd", "gs", "dj", "aspect",
+	"pc", "pdf", "gfl", "cc", "cbh", "cfl", "fmc_in", "d0_in", "sd", "sh", "hr",
+	"accel", "theta", "isi_in", "buieff",
+}
+
+// PredictGrid against fbpRaster(), cell for cell.
+//
+// Oracle case (b): the generator builds small terra grids and records every
+// cell's fbpRaster() output under fbp_grid_cases. Each grid is rebuilt here as a
+// Grid — wind and aspect turned from "from" to "towards", hours to minutes —
+// and passed to PredictGrid in one call, so what is asserted is the grid entry
+// point, not Predict cell by cell.
+//
+// Every cell is one of two things, and the test says which:
+//
+//   - Computed: every numeric output and FD (as 1/2/3) equal fbpRaster()'s.
+//   - Refused, where fbpRaster() filled the cell in. The refusal has to be the
+//     one that names why: ErrGridFuelCode for a code outside 1-19 (cffdrs ran
+//     C2), ErrUnknownFuel for NF and WA (cffdrs wrote zeros), ErrC6OnSlope for
+//     C6 on a slope (the Slopecalc.r gap Predict already refuses). A cell with
+//     an NA input may be refused for any reason — fbp() substituted a default
+//     there — or computed, and then it must match.
+//
+// A cell with no NA input and a valid code that is refused fails the test, and
+// so does a refused cell the rules above do not explain. The all-NA cell is not
+// in the fixture: fbpRaster() shifts every later cell when given one, and the
+// generator asserts that rather than recording it (see PredictGrid).
+//
+// ledger: fbpRaster.r
+func TestCFFDRSPredictGrid(t *testing.T) {
+	f := loadCFFDRS(t)
+	if len(f.FBPGrid) == 0 {
+		t.Fatal("the fixture has no fbp_grid_cases: it predates the fbpRaster() block " +
+			"(testdata/README.md lists it among the earlier digests). Regenerate it.")
+	}
+	const tol = 1e-9
+
+	byGrid := map[string][]fbpGridCase{}
+	for _, c := range f.FBPGrid {
+		byGrid[c.Grid] = append(byGrid[c.Grid], c)
+	}
+	ids := make([]string, 0, len(byGrid))
+	for id := range byGrid {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
+	outCols := []string{
+		"cfb", "cfc", "fd", "hfi", "raz", "ros", "sfc", "tfc", "be", "sf", "isi",
+		"fmc", "rso", "csi", "fros", "bros", "hrost", "frost", "brost", "fcfb",
+		"bcfb", "ffi", "bfi", "ftfc", "btfc", "ti", "fti", "bti", "lb", "lbt",
+		"wsv", "dh", "db", "df",
+	}
+	worst := map[string]float64{}
+	computed, refused, naRefused, shown := 0, 0, 0, 0
+	why := map[string]int{}
+	codes := map[float64]bool{}
+	fds := map[float64]int{}
+	for _, id := range ids {
+		cells := byGrid[id]
+		sort.Slice(cells, func(i, j int) bool { return cells[i].Cell < cells[j].Cell })
+		n := len(cells)
+		for i, c := range cells {
+			if c.Cell != i+1 {
+				t.Fatalf("%s: cells are not 1..%d (cell %d at %d)", id, n, c.Cell, i)
+			}
+			for _, k := range append(append([]string{}, fbpGridInputs...), outCols...) {
+				if _, ok := c.v[k]; !ok {
+					t.Fatalf("%s cell %d: no %q column", id, c.Cell, k)
+				}
+			}
+		}
+		layer := func(fn func(c fbpGridCase) float64) []float64 {
+			v := make([]float64, n)
+			for i, c := range cells {
+				v[i] = fn(c)
+			}
+			return v
+		}
+		col := func(k string) []float64 { return layer(func(c fbpGridCase) float64 { return c.f(k) }) }
+		accel := math.NaN()
+		for _, c := range cells {
+			if a := c.f("accel"); !math.IsNaN(a) {
+				if !math.IsNaN(accel) && a != accel {
+					t.Fatalf("%s: accel varies across the grid; PredictGrid takes it once", id)
+				}
+				accel = a
+			}
+		}
+		g := Grid{
+			Fuel: col("fuel_code"), FFMC: col("ffmc_in"), BUI: col("bui"),
+			WindKmh:           col("ws"),
+			WindAzimuthDeg:    layer(func(c fbpGridCase) float64 { return c.f("wd") + 180 }),
+			SlopePct:          col("gs"),
+			UpslopeAzimuthDeg: layer(func(c fbpGridCase) float64 { return c.f("aspect") + 180 }),
+			PC:                col("pc"), PDF: col("pdf"), CuringPct: col("cc"), GrassFuelLoad: col("gfl"),
+			FMC: col("fmc_in"), Lat: col("lat"), Long: col("long"), ElevM: col("elv"),
+			DayOfYear: col("dj"), D0: col("d0_in"),
+			CBH: col("cbh"), CFL: col("cfl"), StandDensity: col("sd"), StandHeight: col("sh"),
+			ElapsedMin: layer(func(c fbpGridCase) float64 { return c.f("hr") * 60 }),
+		}
+		preds, errs, err := PredictGrid(g, GridOptions{Crown: CrownCFFDRS, PointIgnition: accel == 1})
+		if err != nil {
+			t.Fatalf("%s: %v", id, err)
+		}
+
+		for i, c := range cells {
+			code := c.f("fuel_code")
+			codes[code] = true
+			hasNA := false
+			for _, k := range fbpGridInputs {
+				if math.IsNaN(c.f(k)) {
+					hasNA = true
+				}
+			}
+			fuel, valid := FuelFromGridCode(code)
+			var want error
+			switch {
+			case !valid:
+				want = ErrGridFuelCode
+			case fuel == "NF" || fuel == "WA":
+				want = ErrUnknownFuel
+			case fuel == "C6" && c.f("gs") > 0:
+				want = ErrC6OnSlope
+			}
+			if want != nil {
+				if !errors.Is(errs[i], want) {
+					t.Errorf("%s cell %d code %v: err = %v, want %v", id, c.Cell, code, errs[i], want)
+				}
+				refused++
+				why[want.Error()]++
+				continue
+			}
+			if errs[i] != nil {
+				if !hasNA {
+					t.Errorf("%s cell %d code %v: refused with no NA input and a valid code: %v", id, c.Cell, code, errs[i])
+				}
+				refused++
+				naRefused++
+				why["NA input: "+errs[i].Error()]++
+				continue
+			}
+			computed++
+			p := preds[i]
+			fds[c.f("fd")]++
+			got := map[string]float64{
+				"cfb": p.CFB, "cfc": p.CFC, "fd": p.FD.Code(), "hfi": p.HFI, "ros": p.ROS,
+				"sfc": p.SFC, "tfc": p.TFC, "be": p.BE, "sf": p.SF, "isi": p.ISI, "fmc": p.FMC,
+				"rso": p.RSO, "csi": p.CSI, "fros": p.FROS, "bros": p.BROS, "hrost": p.HROSt,
+				"frost": p.FROSt, "brost": p.BROSt, "fcfb": p.FCFB, "bcfb": p.BCFB, "ffi": p.FFI,
+				"bfi": p.BFI, "ftfc": p.FTFC, "btfc": p.BTFC, "ti": p.TI, "fti": p.FTI, "bti": p.BTI,
+				"lb": p.LB, "lbt": p.LBt, "wsv": p.WSV, "dh": p.DH, "db": p.DB, "df": p.DF,
+			}
+			for _, k := range outCols {
+				g, w := got[k], c.f(k)
+				if k == "raz" {
+					g, w = angleDiff(p.RAZ, w), 0
+				}
+				worst[k] = maxF(worst[k], relErr(g, w))
+				if !closeEnough(g, w, tol) {
+					if shown++; shown <= 15 {
+						t.Errorf("%s cell %d code %v (%s): %s = %v, fbpRaster %v", id, c.Cell, code, fuel, k, g, w)
+					}
+				}
+			}
+		}
+	}
+
+	if shown > 0 {
+		t.Errorf("%d mismatched outputs in all", shown)
+	}
+	keys := make([]string, 0, len(worst))
+	for k := range worst {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	overall, at := 0.0, ""
+	for _, k := range keys {
+		if worst[k] > overall {
+			overall, at = worst[k], k
+		}
+	}
+	t.Logf("%d grids, %d cells: %d computed (worst relative error %.3g, %s), %d refused", len(ids),
+		len(f.FBPGrid), computed, overall, at, refused)
+	whys := make([]string, 0, len(why))
+	for k := range why {
+		whys = append(whys, k)
+	}
+	sort.Strings(whys)
+	for _, k := range whys {
+		t.Logf("  refused %4d  %s", why[k], k)
+	}
+	t.Logf("FD over computed cells: S %d, I %d, C %d", fds[1], fds[2], fds[3])
+
+	for code := 1.0; code <= 19; code++ {
+		if !codes[code] {
+			t.Errorf("fuel code %v never appears in the grids", code)
+		}
+	}
+	for _, code := range []float64{0, 20, 7.5} {
+		if !codes[code] {
+			t.Errorf("out-of-range code %v never appears in the grids", code)
+		}
+	}
+	if fds[1] == 0 || fds[2] == 0 || fds[3] == 0 {
+		t.Errorf("not every FD class is reached: %v", fds)
+	}
+	if naRefused == 0 {
+		t.Error("no NA input was refused — the NA grid is not reaching PredictGrid's refusals")
+	}
+}

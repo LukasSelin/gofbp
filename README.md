@@ -147,6 +147,19 @@ cannot see — see below — and it does not compute the rate at a bearing, whic
 `ROSAtAngle` does from its head, flank and back rates. Asserted against
 `fbp()` on every row of the reference sweep.
 
+`PredictGrid` is the same over a grid, as cffdrs' `fbpRaster()` computes it:
+one slice per layer, the fuel layer holding `fbpRaster()`'s numeric codes 1–19
+(`GridFuelCodes`; NF is 13 and WA 19), and FD as a layer is `p.FD.Code()`, 1/2/3.
+A nil layer is that `Input` field's zero value. A cell `Predict` refuses gets NaN
+in every output and its own error, and the rest of the grid carries on. That
+departs from `fbpRaster()` in three places, all of them cells it fills in
+without saying so: a code outside 1–19 (or NA) is computed there as C2; an NA
+layer gets `fbp()`'s default for it; and NF and WA come back as zeros. Here
+each of those is refused. A cell that is NA in every layer makes `fbpRaster()`
+shift every later cell's answer by one. That is a defect, and it is not
+reproduced: no other cell moves. The cells run in sequence; they are
+independent, so split the slices across goroutines if you want parallelism.
+
 ## What is implemented
 
 - `CanonicalFuelCode` — folds a fuel code to the table's spelling and says
@@ -192,6 +205,8 @@ cannot see — see below — and it does not compute the rate at a bearing, whic
   hours and multiplies by 60. Pass the head fire's CFB for every rate, back
   included, to match `fbp()`
 - `Predict` — the whole prediction in one call; see [The driver](#the-driver-predict)
+- `PredictGrid` — `Predict` over a grid, as `cffdrs::fbpRaster()`, with
+  `GridFuelCodes`, `FuelFromGridCode` and `FireDescription.Code`
 - `FireIntensity` — Byram's fireline intensity, `300·FC·ROS` kW/m (eq. 69).
   The head fire intensity HFI is `FireIntensity(TotalFuelConsumption(…), ros)`,
   where `ros` is the surface rate for sixteen fuels and `C6CrownFire`'s blended
@@ -502,7 +517,7 @@ the pinned oracle on 2026-09-18; see `ROSAtAngle`'s doc comment and
 [MIGRATION.md](MIGRATION.md).
 
 **The `Go` workflow does not run the oracle.** The 15.8 MB fixture is generated
-rather than committed, so the thirty-six fixture-backed tests skip on a fresh clone
+rather than committed, so the thirty-seven fixture-backed tests skip on a fresh clone
 and a green `Go` badge means the identities, round-trips, invariants and NaN
 sweeps pass.
 

@@ -27,9 +27,10 @@ func TestLoadTheRealLedger(t *testing.T) {
 		t.Errorf("%d log entries", len(l.Log))
 	}
 	// Empty from 2026-10-21, when the last row with work in it went 🟢, until the
-	// 2026-10-25 re-scope; TestDependencyOrderKeepsItsOrder pins what it holds.
-	if len(l.DependencyOrder) == 0 {
-		t.Error("dependency order is empty, but the 2026-10-25 re-scope put two rows on it")
+	// 2026-10-25 re-scope, and empty again once both raster wrappers were ported
+	// that day; the ledger says so with NothingOwed, which is what lets it parse.
+	if len(l.DependencyOrder) != 0 {
+		t.Errorf("dependency order: %v, want empty", l.DependencyOrder)
 	}
 
 	byKey := l.ByKey()
@@ -103,8 +104,9 @@ func TestDependencyOrderKeepsItsOrder(t *testing.T) {
 	// land on something else.
 	// From 2026-10-21 to 2026-10-25 there was no top row: the list was empty and
 	// said so. The 2026-10-25 re-scope brought the two raster wrappers back, FWI
-	// first, and fwiRaster.r was ported the same day.
-	want := []string{"fbpRaster.r"}
+	// first, and both were ported the same day, so the list is empty again. A row
+	// going back to 🔴 must reappear here, and this is the line to update.
+	var want []string
 	if !slices.Equal(l.DependencyOrder, want) {
 		t.Errorf("dependency order = %q, want %q", l.DependencyOrder, want)
 	}
