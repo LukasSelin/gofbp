@@ -222,3 +222,71 @@ func TestStepGridRefusesRaggedLayers(t *testing.T) {
 		t.Errorf("empty grid: %v, %d cells", err, len(got.FWI))
 	}
 }
+
+// StepGridParallel is StepGrid to the bit, cell for cell, whatever the worker
+// count — dividing the grid, not dividing it, exceeding it, or with no cells.
+func TestStepGridParallelIsBitIdentical(t *testing.T) {
+	g, wx, _ := gridOf()
+	n := len(wx)
+	g.TempC[5], g.WindKmh[77], g.LatDeg[n-1] = math.NaN(), math.NaN(), math.NaN()
+	y := UniformGridState(StartupState(), n)
+	y.DMC[300] = math.NaN()
+	for _, tc := range []struct {
+		name string
+		y    GridState
+		g    Grid
+	}{{"sweep", y, g}, {"empty", GridState{}, Grid{}}} {
+		want, err := StepGrid(tc.y, tc.g, 8)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, workers := range []int{-1, 0, 1, 2, 3, 7, len(tc.g.TempC) + 5} {
+			got, err := StepGridParallel(tc.y, tc.g, 8, workers)
+			if err != nil {
+				t.Fatalf("%s, %d workers: %v", tc.name, workers, err)
+			}
+			for _, l := range []struct {
+				name      string
+				got, want []float64
+			}{
+				{"FFMC", got.FFMC, want.FFMC}, {"DMC", got.DMC, want.DMC}, {"DC", got.DC, want.DC},
+				{"ISI", got.ISI, want.ISI}, {"BUI", got.BUI, want.BUI}, {"FWI", got.FWI, want.FWI},
+				{"DSR", got.DSR, want.DSR},
+			} {
+				if len(l.got) != len(l.want) {
+					t.Fatalf("%s, %d workers: %s has %d cells, want %d", tc.name, workers, l.name, len(l.got), len(l.want))
+				}
+				for i := range l.want {
+					if math.Float64bits(l.got[i]) != math.Float64bits(l.want[i]) {
+						t.Errorf("%s, %d workers: %s cell %d = %v, serial %v", tc.name, workers, l.name, i, l.got[i], l.want[i])
+					}
+				}
+			}
+		}
+	}
+}
+
+// The whole-grid refusals do not depend on the worker count: same layer, same
+// cell, same message, and no output.
+func TestStepGridParallelRefusesAsStepGrid(t *testing.T) {
+	g, wx, _ := gridOf()
+	n := len(wx)
+	y := UniformGridState(StartupState(), n)
+	g.RHPct[3], g.WindKmh[n-2], g.PrecipMm[n/2], g.PrecipMm[n-1] = -1, -1, -1, -1
+	ragged := g
+	ragged.LatDeg = g.LatDeg[:n-1]
+	for _, gg := range []Grid{g, ragged} {
+		_, want := StepGrid(y, gg, 7)
+		var wge *GridError
+		if !errors.As(want, &wge) {
+			t.Fatalf("StepGrid: err %v, want a GridError", want)
+		}
+		for _, workers := range []int{2, 3, 7, n + 5} {
+			got, err := StepGridParallel(y, gg, 7, workers)
+			var ge *GridError
+			if !errors.As(err, &ge) || *ge != *wge || got.FFMC != nil {
+				t.Errorf("%d workers: err %v, want %v and no output", workers, err, want)
+			}
+		}
+	}
+}

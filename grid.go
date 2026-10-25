@@ -79,6 +79,11 @@ type Grid struct {
 type GridOptions struct {
 	Crown         CrownSource // as Input.Crown; CrownUnset refuses every cell
 	PointIgnition bool        // as Input.PointIgnition
+
+	// Workers is how many goroutines share the cells; 0 or 1 is one, the
+	// calling goroutine. It is the caller's because the package cannot ask:
+	// runtime.NumCPU is an import, and the package imports math alone.
+	Workers int
 }
 
 // GridError is PredictGrid's refusal of the whole grid: a layer whose length
@@ -123,10 +128,13 @@ func (e *GridError) Error() string {
 // cell takes the next cell's answer and the last takes the first cell's.
 // Here such a cell is refused like any other, and no other cell moves.
 //
-// Cells are independent and are computed in order with no shared state, so a
-// caller who wants parallelism can split the slices across goroutines and get
-// bit-identical results. This package does not: it imports math and nothing
-// else. fbpRaster()'s m and cores are that chunking, and change no value.
+// Cells are independent and share no state, so GridOptions.Workers above 1
+// splits the grid into that many contiguous blocks, one goroutine each, every
+// one writing only its own block of the output. It changes no value, no error
+// and no cell's place: a cell is the same arithmetic on whichever goroutine
+// runs it, and the result is bit-identical to Workers 1. fbpRaster()'s m and
+// cores are the same chunking, and change no value either. Workers above the
+// cell count is the cell count; the call returns when every block is done.
 //
 // Not ported: reading or writing rasters (the caller's); the reprojection to
 // EPSG:4326 that fbpRaster() runs when there is no LAT layer, which needs sf —
@@ -154,15 +162,29 @@ func PredictGrid(g Grid, opt GridOptions) ([]Prediction, []error, error) {
 		}
 	}
 
+	out := make([]Prediction, n)
+	errs := make([]error, n)
+	if opt.Workers <= 1 {
+		// Not through inChunks: the closure it takes escapes to the goroutines,
+		// and what it captures with it, which would cost the serial path
+		// allocations it never had. Hence also the copies below.
+		predictCells(g, opt, out, errs, 0, n)
+	} else {
+		g, opt := g, opt
+		inChunks(n, opt.Workers, func(lo, hi int) { predictCells(g, opt, out, errs, lo, hi) })
+	}
+	return out, errs, nil
+}
+
+// predictCells is PredictGrid's cells lo to hi-1, written into out and errs.
+func predictCells(g Grid, opt GridOptions, out []Prediction, errs []error, lo, hi int) {
 	at := func(v []float64, i int) float64 {
 		if v == nil {
 			return 0
 		}
 		return v[i]
 	}
-	out := make([]Prediction, n)
-	errs := make([]error, n)
-	for i := 0; i < n; i++ {
+	for i := lo; i < hi; i++ {
 		fuel, ok := FuelFromGridCode(g.Fuel[i])
 		if !ok {
 			out[i], errs[i] = refusedCell(), ErrGridFuelCode
@@ -189,7 +211,37 @@ func PredictGrid(g Grid, opt GridOptions) ([]Prediction, []error, error) {
 		}
 		out[i], errs[i] = p, err
 	}
-	return out, errs, nil
+}
+
+// inChunks runs f over [0, n) split into contiguous blocks, one goroutine per
+// block, and returns when all of them have. With one block or none to share —
+// workers <= 1, or n <= 1 — it is f(0, n) on the calling goroutine. The blocks
+// differ in size by at most one cell, and the join is one channel receive per
+// block, which is also what publishes each block's writes to the caller.
+func inChunks(n, workers int, f func(lo, hi int)) {
+	if workers > n {
+		workers = n
+	}
+	if workers <= 1 {
+		f(0, n)
+		return
+	}
+	done := make(chan struct{}, workers)
+	size, extra := n/workers, n%workers
+	for w, lo := 0, 0; w < workers; w++ {
+		hi := lo + size
+		if w < extra {
+			hi++
+		}
+		go func(lo, hi int) {
+			f(lo, hi)
+			done <- struct{}{}
+		}(lo, hi)
+		lo = hi
+	}
+	for w := 0; w < workers; w++ {
+		<-done
+	}
 }
 
 // refusedCell is a Prediction with NaN in every number and no FD.

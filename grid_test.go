@@ -243,3 +243,70 @@ func TestPredictGridLayerLengths(t *testing.T) {
 		t.Errorf("CrownUnset: err = %v", errs[0])
 	}
 }
+
+// Workers changes who computes a cell and nothing else: every number to the
+// bit, every error, every cell in its place, for counts that divide the grid,
+// do not, exceed it, and for no cells at all.
+func TestPredictGridWorkersIsBitIdentical(t *testing.T) {
+	big := benchGrid(257)
+	for i := 0; i < len(big.Fuel); i += 17 {
+		big.Fuel[i] = []float64{0, 13, 19, 7.5}[i%4] // refused codes and non-fuels
+	}
+	big.FFMC[40] = math.NaN()
+	big.SlopePct[41], big.Fuel[41] = 30, 6 // C6 on a slope
+	for _, tc := range []struct {
+		name string
+		g    Grid
+	}{{"gridOf", gridOf()}, {"257 cells", big}, {"empty", Grid{}}} {
+		opt := GridOptions{Crown: CrownCFFDRS, PointIgnition: true}
+		want, wantErrs, err := PredictGrid(tc.g, opt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		refused := 0
+		for _, e := range wantErrs {
+			if e != nil {
+				refused++
+			}
+		}
+		if tc.name != "empty" && refused == 0 {
+			t.Fatalf("%s: no refused cell to check", tc.name)
+		}
+		for _, workers := range []int{-1, 0, 1, 2, 3, 7, len(tc.g.Fuel) + 5, 1000} {
+			opt.Workers = workers
+			got, errs, err := PredictGrid(tc.g, opt)
+			if err != nil {
+				t.Fatalf("%s, %d workers: %v", tc.name, workers, err)
+			}
+			if len(got) != len(want) || len(errs) != len(wantErrs) {
+				t.Fatalf("%s, %d workers: %d cells, want %d", tc.name, workers, len(got), len(want))
+			}
+			for i := range want {
+				if !sameBits(got[i], want[i]) {
+					t.Errorf("%s, %d workers: cell %d differs from serial:\n%+v\n%+v", tc.name, workers, i, got[i], want[i])
+				}
+				if (errs[i] == nil) != (wantErrs[i] == nil) ||
+					errs[i] != nil && (errs[i].Error() != wantErrs[i].Error() || reflect.TypeOf(errs[i]) != reflect.TypeOf(wantErrs[i])) {
+					t.Errorf("%s, %d workers: cell %d err %v, serial %v", tc.name, workers, i, errs[i], wantErrs[i])
+				}
+			}
+		}
+	}
+}
+
+// sameBits is a == b field by field, comparing float64s by their bits so that
+// NaN equals NaN and -0 does not equal 0.
+func sameBits(a, b Prediction) bool {
+	va, vb := reflect.ValueOf(a), reflect.ValueOf(b)
+	for j := 0; j < va.NumField(); j++ {
+		fa, fb := va.Field(j), vb.Field(j)
+		if fa.Kind() == reflect.Float64 {
+			if math.Float64bits(fa.Float()) != math.Float64bits(fb.Float()) {
+				return false
+			}
+		} else if fa.Interface() != fb.Interface() {
+			return false
+		}
+	}
+	return true
+}

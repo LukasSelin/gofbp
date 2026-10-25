@@ -2,6 +2,7 @@ package fbp
 
 import (
 	"math/rand"
+	"runtime"
 	"testing"
 )
 
@@ -98,26 +99,46 @@ func benchGrid(n int) Grid {
 
 var sinkGrid []Prediction
 
+// BenchmarkPredictGrid is PredictGrid at each worker count. workers=1 is the
+// serial path; 24 is every thread of the machine the numbers were taken on, and
+// runtime.NumCPU() is whatever this one has.
 func BenchmarkPredictGrid(b *testing.B) {
 	for _, n := range []int{1_000, 100_000} {
 		g := benchGrid(n)
 		b.Run(itoa(n), func(b *testing.B) {
-			b.ReportAllocs()
-			for i := 0; i < b.N; i++ {
-				out, errs, err := PredictGrid(g, GridOptions{Crown: CrownCFFDRS, PointIgnition: true})
-				if err != nil {
-					b.Fatal(err)
-				}
-				for _, e := range errs {
-					if e != nil {
-						b.Fatal(e)
+			for _, workers := range benchWorkers() {
+				b.Run("workers="+itoa(workers), func(b *testing.B) {
+					b.ReportAllocs()
+					opt := GridOptions{Crown: CrownCFFDRS, PointIgnition: true, Workers: workers}
+					for i := 0; i < b.N; i++ {
+						out, errs, err := PredictGrid(g, opt)
+						if err != nil {
+							b.Fatal(err)
+						}
+						for _, e := range errs {
+							if e != nil {
+								b.Fatal(e)
+							}
+						}
+						sinkGrid = out
 					}
-				}
-				sinkGrid = out
+					b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N*n), "ns/cell")
+				})
 			}
-			b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N*n), "ns/cell")
 		})
 	}
+}
+
+// benchWorkers is 1, 4, 12 and 24 workers, plus runtime.NumCPU() where it is
+// none of those.
+func benchWorkers() []int {
+	ws := []int{1, 4, 12, 24}
+	for _, w := range ws {
+		if w == runtime.NumCPU() {
+			return ws
+		}
+	}
+	return append(ws, runtime.NumCPU())
 }
 
 func itoa(n int) string {
