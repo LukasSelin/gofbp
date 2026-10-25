@@ -272,25 +272,80 @@ func TestPredictGridWorkersIsBitIdentical(t *testing.T) {
 		if tc.name != "empty" && refused == 0 {
 			t.Fatalf("%s: no refused cell to check", tc.name)
 		}
+		// One pair of buffers for every PredictGridInto call below, dirtied
+		// before each, so a cell it fails to write shows.
+		bufOut, bufErrs := make([]Prediction, len(want)), make([]error, len(want))
 		for _, workers := range []int{-1, 0, 1, 2, 3, 7, len(tc.g.Fuel) + 5, 1000} {
 			opt.Workers = workers
 			got, errs, err := PredictGrid(tc.g, opt)
 			if err != nil {
 				t.Fatalf("%s, %d workers: %v", tc.name, workers, err)
 			}
-			if len(got) != len(want) || len(errs) != len(wantErrs) {
-				t.Fatalf("%s, %d workers: %d cells, want %d", tc.name, workers, len(got), len(want))
+			checkSameAsSerial(t, tc.name+", PredictGrid", workers, got, errs, want, wantErrs)
+			for i := range bufOut {
+				bufOut[i], bufErrs[i] = Prediction{ROS: 7, FD: ContinuousCrown}, ErrGridFuelCode
 			}
-			for i := range want {
-				if !sameBits(got[i], want[i]) {
-					t.Errorf("%s, %d workers: cell %d differs from serial:\n%+v\n%+v", tc.name, workers, i, got[i], want[i])
-				}
-				if (errs[i] == nil) != (wantErrs[i] == nil) ||
-					errs[i] != nil && (errs[i].Error() != wantErrs[i].Error() || reflect.TypeOf(errs[i]) != reflect.TypeOf(wantErrs[i])) {
-					t.Errorf("%s, %d workers: cell %d err %v, serial %v", tc.name, workers, i, errs[i], wantErrs[i])
+			if err := PredictGridInto(bufOut, bufErrs, tc.g, opt); err != nil {
+				t.Fatalf("%s, %d workers: PredictGridInto: %v", tc.name, workers, err)
+			}
+			checkSameAsSerial(t, tc.name+", PredictGridInto", workers, bufOut, bufErrs, want, wantErrs)
+		}
+	}
+}
+
+// checkSameAsSerial is got and errs against the serial run, cell by cell.
+func checkSameAsSerial(t *testing.T, name string, workers int, got []Prediction, errs []error, want []Prediction, wantErrs []error) {
+	t.Helper()
+	if len(got) != len(want) || len(errs) != len(wantErrs) {
+		t.Fatalf("%s, %d workers: %d cells, want %d", name, workers, len(got), len(want))
+	}
+	for i := range want {
+		if !sameBits(got[i], want[i]) {
+			t.Errorf("%s, %d workers: cell %d differs from serial:\n%+v\n%+v", name, workers, i, got[i], want[i])
+		}
+		if (errs[i] == nil) != (wantErrs[i] == nil) ||
+			errs[i] != nil && (errs[i].Error() != wantErrs[i].Error() || reflect.TypeOf(errs[i]) != reflect.TypeOf(wantErrs[i])) {
+			t.Errorf("%s, %d workers: cell %d err %v, serial %v", name, workers, i, errs[i], wantErrs[i])
+		}
+	}
+}
+
+// PredictGridInto refuses a layer first, then out, then errs, and writes
+// nothing when it does.
+func TestPredictGridIntoRefusesLengths(t *testing.T) {
+	g := gridOf()
+	n := len(g.Fuel)
+	for _, tc := range []struct {
+		name  string
+		g     Grid
+		out   []Prediction
+		errs  []error
+		layer string
+	}{
+		{"short layer before short out", Grid{Fuel: g.Fuel, BUI: g.BUI[:2]}, make([]Prediction, n-1), make([]error, n), "BUI"},
+		{"short out", g, make([]Prediction, n-1), make([]error, n), "out"},
+		{"long out", g, make([]Prediction, n+1), make([]error, n), "out"},
+		{"short errs", g, make([]Prediction, n), make([]error, n-1), "errs"},
+		{"nil out", g, nil, make([]error, n), "out"},
+	} {
+		for _, workers := range []int{1, 3} {
+			for i := range tc.out {
+				tc.out[i].ROS = 7
+			}
+			err := PredictGridInto(tc.out, tc.errs, tc.g, GridOptions{Crown: CrownCFFDRS, Workers: workers})
+			var ge *GridError
+			if !errors.As(err, &ge) || ge.Layer != tc.layer {
+				t.Errorf("%s, %d workers: err %v, want a GridError on %s", tc.name, workers, err, tc.layer)
+			}
+			for i := range tc.out {
+				if tc.out[i].ROS != 7 || tc.errs != nil && i < len(tc.errs) && tc.errs[i] != nil {
+					t.Fatalf("%s, %d workers: cell %d written by a refused call", tc.name, workers, i)
 				}
 			}
 		}
+	}
+	if err := PredictGridInto(nil, nil, Grid{}, GridOptions{Workers: 4}); err != nil {
+		t.Errorf("empty grid into nil slices: %v", err)
 	}
 }
 
@@ -309,4 +364,18 @@ func sameBits(a, b Prediction) bool {
 		}
 	}
 	return true
+}
+
+// The serial path allocates what it returns and nothing else: PredictGrid its
+// two slices, PredictGridInto nothing.
+func TestPredictGridSerialAllocations(t *testing.T) {
+	g := benchGrid(64)
+	opt := GridOptions{Crown: CrownCFFDRS, PointIgnition: true, Workers: 1}
+	out, errs := make([]Prediction, 64), make([]error, 64)
+	if a := testing.AllocsPerRun(20, func() { PredictGrid(g, opt) }); a != 2 {
+		t.Errorf("PredictGrid, 1 worker: %v allocations, want 2", a)
+	}
+	if a := testing.AllocsPerRun(20, func() { PredictGridInto(out, errs, g, opt) }); a != 0 {
+		t.Errorf("PredictGridInto, 1 worker: %v allocations, want 0", a)
+	}
 }

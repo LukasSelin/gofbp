@@ -3,6 +3,7 @@ package fwi
 import (
 	"errors"
 	"math"
+	"strconv"
 	"testing"
 )
 
@@ -223,51 +224,104 @@ func TestStepGridRefusesRaggedLayers(t *testing.T) {
 	}
 }
 
-// StepGridParallel is StepGrid to the bit, cell for cell, whatever the worker
-// count — dividing the grid, not dividing it, exceeding it, or with no cells.
-func TestStepGridParallelIsBitIdentical(t *testing.T) {
+// parallelCases is a sweep with NaNs in a weather layer, a latitude and a
+// code, and an empty grid.
+func parallelCases() []struct {
+	name string
+	y    GridState
+	g    Grid
+} {
 	g, wx, _ := gridOf()
 	n := len(wx)
 	g.TempC[5], g.WindKmh[77], g.LatDeg[n-1] = math.NaN(), math.NaN(), math.NaN()
 	y := UniformGridState(StartupState(), n)
 	y.DMC[300] = math.NaN()
-	for _, tc := range []struct {
+	return []struct {
 		name string
 		y    GridState
 		g    Grid
-	}{{"sweep", y, g}, {"empty", GridState{}, Grid{}}} {
-		want, err := StepGrid(tc.y, tc.g, 8)
-		if err != nil {
-			t.Fatal(err)
+	}{{"sweep", y, g}, {"empty", GridState{}, Grid{}}}
+}
+
+// parallelWorkers is the worker counts every parallel path is held to: none,
+// one, counts that divide the grid and counts that do not, and more than the
+// cells.
+func parallelWorkers(n int) []int { return []int{-1, 0, 1, 2, 3, 7, n + 5} }
+
+// newGridIndices is n cells of out, every one -12345, so a cell a call fails to
+// write shows.
+func newGridIndices(n int) GridIndices {
+	ix := GridIndices{}
+	for _, p := range []*[]float64{&ix.FFMC, &ix.DMC, &ix.DC, &ix.ISI, &ix.BUI, &ix.FWI, &ix.DSR} {
+		*p = make([]float64, n)
+		for i := range *p {
+			(*p)[i] = -12345
 		}
-		for _, workers := range []int{-1, 0, 1, 2, 3, 7, len(tc.g.TempC) + 5} {
-			got, err := StepGridParallel(tc.y, tc.g, 8, workers)
-			if err != nil {
-				t.Fatalf("%s, %d workers: %v", tc.name, workers, err)
-			}
-			for _, l := range []struct {
-				name      string
-				got, want []float64
-			}{
-				{"FFMC", got.FFMC, want.FFMC}, {"DMC", got.DMC, want.DMC}, {"DC", got.DC, want.DC},
-				{"ISI", got.ISI, want.ISI}, {"BUI", got.BUI, want.BUI}, {"FWI", got.FWI, want.FWI},
-				{"DSR", got.DSR, want.DSR},
-			} {
-				if len(l.got) != len(l.want) {
-					t.Fatalf("%s, %d workers: %s has %d cells, want %d", tc.name, workers, l.name, len(l.got), len(l.want))
-				}
-				for i := range l.want {
-					if math.Float64bits(l.got[i]) != math.Float64bits(l.want[i]) {
-						t.Errorf("%s, %d workers: %s cell %d = %v, serial %v", tc.name, workers, l.name, i, l.got[i], l.want[i])
-					}
-				}
+	}
+	return ix
+}
+
+// sameIndices is got against want, every layer, every cell, to the bit.
+func sameIndices(t *testing.T, name string, got, want GridIndices) {
+	t.Helper()
+	for _, l := range []struct {
+		name      string
+		got, want []float64
+	}{
+		{"FFMC", got.FFMC, want.FFMC}, {"DMC", got.DMC, want.DMC}, {"DC", got.DC, want.DC},
+		{"ISI", got.ISI, want.ISI}, {"BUI", got.BUI, want.BUI}, {"FWI", got.FWI, want.FWI},
+		{"DSR", got.DSR, want.DSR},
+	} {
+		if len(l.got) != len(l.want) {
+			t.Fatalf("%s: %s has %d cells, want %d", name, l.name, len(l.got), len(l.want))
+		}
+		for i := range l.want {
+			if math.Float64bits(l.got[i]) != math.Float64bits(l.want[i]) {
+				t.Errorf("%s: %s cell %d = %v, serial %v", name, l.name, i, l.got[i], l.want[i])
 			}
 		}
 	}
 }
 
-// The whole-grid refusals do not depend on the worker count: same layer, same
-// cell, same message, and no output.
+// StepGridParallel and StepGridInto are StepGrid to the bit, cell for cell,
+// whatever the worker count — dividing the grid, not dividing it, exceeding it,
+// or with no cells — and StepGridInto is so into a dirty buffer and in place.
+func TestStepGridParallelIsBitIdentical(t *testing.T) {
+	for _, tc := range parallelCases() {
+		want, err := StepGrid(tc.y, tc.g, 8)
+		if err != nil {
+			t.Fatal(err)
+		}
+		n := len(tc.g.TempC)
+		for _, workers := range parallelWorkers(n) {
+			name := tc.name + ", " + strconv.Itoa(workers) + " workers"
+			got, err := StepGridParallel(tc.y, tc.g, 8, workers)
+			if err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
+			sameIndices(t, name+", StepGridParallel", got, want)
+
+			into := newGridIndices(n)
+			if err := StepGridInto(into, tc.y, tc.g, 8, workers); err != nil {
+				t.Fatalf("%s: StepGridInto: %v", name, err)
+			}
+			sameIndices(t, name+", StepGridInto", into, want)
+
+			// In place: yesterday's own slices are out's codes.
+			inPlace := newGridIndices(n)
+			copy(inPlace.FFMC, tc.y.FFMC)
+			copy(inPlace.DMC, tc.y.DMC)
+			copy(inPlace.DC, tc.y.DC)
+			if err := StepGridInto(inPlace, inPlace.State(), tc.g, 8, workers); err != nil {
+				t.Fatalf("%s: StepGridInto in place: %v", name, err)
+			}
+			sameIndices(t, name+", StepGridInto in place", inPlace, want)
+		}
+	}
+}
+
+// The whole-grid refusals do not depend on the worker count or the path: same
+// layer, same cell, same message, and no output.
 func TestStepGridParallelRefusesAsStepGrid(t *testing.T) {
 	g, wx, _ := gridOf()
 	n := len(wx)
@@ -287,6 +341,59 @@ func TestStepGridParallelRefusesAsStepGrid(t *testing.T) {
 			if !errors.As(err, &ge) || *ge != *wge || got.FFMC != nil {
 				t.Errorf("%d workers: err %v, want %v and no output", workers, err, want)
 			}
+			// A short out too, which must not be what is reported.
+			into := newGridIndices(n)
+			into.DSR = into.DSR[:1]
+			err = StepGridInto(into, y, gg, 7, workers)
+			if !errors.As(err, &ge) || *ge != *wge || into.FFMC[0] != -12345 {
+				t.Errorf("%d workers: StepGridInto err %v, want %v and nothing written", workers, err, want)
+			}
 		}
+	}
+}
+
+// StepGridInto refuses an out slice of the wrong length after the grid's own
+// refusals, in GridIndices' field order, and writes nothing when it does.
+func TestStepGridIntoRefusesOutLengths(t *testing.T) {
+	g, wx, _ := gridOf()
+	n := len(wx)
+	y := UniformGridState(StartupState(), n)
+	for _, tc := range []struct {
+		layer string
+		cut   func(*GridIndices)
+	}{
+		{"out.FFMC", func(ix *GridIndices) { ix.FFMC = nil }},
+		{"out.ISI", func(ix *GridIndices) { ix.ISI = ix.ISI[:n-1]; ix.DSR = ix.DSR[:3] }},
+		{"out.DSR", func(ix *GridIndices) { ix.DSR = append(ix.DSR, 0) }},
+	} {
+		for _, workers := range []int{1, 3} {
+			into := newGridIndices(n)
+			tc.cut(&into)
+			err := StepGridInto(into, y, g, 7, workers)
+			var ge *GridError
+			if !errors.As(err, &ge) || ge.Layer != tc.layer || ge.Cell != -1 {
+				t.Errorf("%s, %d workers: err %v", tc.layer, workers, err)
+			}
+			if into.DMC[0] != -12345 {
+				t.Errorf("%s, %d workers: written by a refused call", tc.layer, workers)
+			}
+		}
+	}
+	if err := StepGridInto(GridIndices{}, GridState{}, Grid{}, 7, 4); err != nil {
+		t.Errorf("empty grid into empty out: %v", err)
+	}
+}
+
+// The serial path allocates what it returns and nothing else: StepGrid its
+// seven slices, StepGridInto nothing.
+func TestStepGridSerialAllocations(t *testing.T) {
+	g, wx, _ := gridOf()
+	y := UniformGridState(StartupState(), len(wx))
+	out := newGridIndices(len(wx))
+	if a := testing.AllocsPerRun(20, func() { StepGrid(y, g, 7) }); a != 7 {
+		t.Errorf("StepGrid: %v allocations, want 7", a)
+	}
+	if a := testing.AllocsPerRun(20, func() { StepGridInto(out, y, g, 7, 1) }); a != 0 {
+		t.Errorf("StepGridInto, 1 worker: %v allocations, want 0", a)
 	}
 }

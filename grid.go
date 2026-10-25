@@ -87,12 +87,16 @@ type GridOptions struct {
 }
 
 // GridError is PredictGrid's refusal of the whole grid: a layer whose length
-// is not Fuel's. Cell refusals are not GridErrors; see PredictGrid.
+// is not Fuel's, or, from PredictGridInto, an output slice whose length is not.
+// Cell refusals are not GridErrors; see PredictGrid.
 type GridError struct {
-	Layer string // the Grid field at fault
+	Layer string // the Grid field at fault, or PredictGridInto's "out" or "errs"
 }
 
 func (e *GridError) Error() string {
+	if e.Layer == "out" || e.Layer == "errs" {
+		return "fbp: output slice " + e.Layer + " differs in length from Fuel"
+	}
 	return "fbp: grid layer " + e.Layer + " differs in length from Fuel"
 }
 
@@ -136,14 +140,53 @@ func (e *GridError) Error() string {
 // cores are the same chunking, and change no value either. Workers above the
 // cell count is the cell count; the call returns when every block is done.
 //
+// PredictGridInto is the same into slices the caller provides and may reuse.
+//
 // Not ported: reading or writing rasters (the caller's); the reprojection to
 // EPSG:4326 that fbpRaster() runs when there is no LAT layer, which needs sf —
 // Lat is a layer here; the rate at a bearing (TROS and the five built on it),
 // for the reason Predict gives; and select and output, which only choose which
 // layers come back.
 func PredictGrid(g Grid, opt GridOptions) ([]Prediction, []error, error) {
+	if err := checkGrid(g); err != nil {
+		return nil, nil, err
+	}
+	out, errs := make([]Prediction, len(g.Fuel)), make([]error, len(g.Fuel))
+	predictInto(out, errs, g, opt)
+	return out, errs, nil
+}
+
+// PredictGridInto is PredictGrid writing into out and errs, which must each be
+// as long as g.Fuel, instead of into slices it makes. Every cell of both is
+// written — a refused cell's NaNs, a computed cell's nil error — so a buffer
+// reused from an earlier call carries nothing over, and the values are
+// PredictGrid's to the bit. A layer of the wrong length is refused first, then
+// out, then errs, each as a *GridError, and then nothing is written.
+//
+// It exists for the caller who runs the same grid size again and again. At
+// 100k cells the two slices PredictGrid makes are 31 MB, zeroed on the calling
+// goroutine before any worker starts; that was 3.1 ms of a 27.7 ms call at 24
+// workers on the machine bench_test.go was measured on (11%), and it does not
+// shrink with more workers. Workers <= 1 allocates nothing here.
+func PredictGridInto(out []Prediction, errs []error, g Grid, opt GridOptions) error {
+	if err := checkGrid(g); err != nil {
+		return err
+	}
+	if len(out) != len(g.Fuel) {
+		return &GridError{Layer: "out"}
+	}
+	if len(errs) != len(g.Fuel) {
+		return &GridError{Layer: "errs"}
+	}
+	predictInto(out, errs, g, opt)
+	return nil
+}
+
+// checkGrid is PredictGrid's refusal: the first layer, in Grid's field order,
+// that is neither nil nor Fuel's length.
+func checkGrid(g Grid) error {
 	n := len(g.Fuel)
-	layers := []struct {
+	for _, l := range [...]struct {
 		name string
 		v    []float64
 	}{
@@ -155,25 +198,27 @@ func PredictGrid(g Grid, opt GridOptions) ([]Prediction, []error, error) {
 		{"DayOfYear", g.DayOfYear}, {"D0", g.D0},
 		{"CBH", g.CBH}, {"CFL", g.CFL}, {"StandDensity", g.StandDensity}, {"StandHeight", g.StandHeight},
 		{"ElapsedMin", g.ElapsedMin},
-	}
-	for _, l := range layers {
+	} {
 		if l.v != nil && len(l.v) != n {
-			return nil, nil, &GridError{Layer: l.name}
+			return &GridError{Layer: l.name}
 		}
 	}
+	return nil
+}
 
-	out := make([]Prediction, n)
-	errs := make([]error, n)
+// predictInto is every cell of a checked grid, written into out and errs, on
+// opt.Workers goroutines.
+func predictInto(out []Prediction, errs []error, g Grid, opt GridOptions) {
+	n := len(g.Fuel)
 	if opt.Workers <= 1 {
 		// Not through inChunks: the closure it takes escapes to the goroutines,
 		// and what it captures with it, which would cost the serial path
 		// allocations it never had. Hence also the copies below.
 		predictCells(g, opt, out, errs, 0, n)
 	} else {
-		g, opt := g, opt
+		g, opt, out, errs := g, opt, out, errs
 		inChunks(n, opt.Workers, func(lo, hi int) { predictCells(g, opt, out, errs, lo, hi) })
 	}
-	return out, errs, nil
 }
 
 // predictCells is PredictGrid's cells lo to hi-1, written into out and errs.

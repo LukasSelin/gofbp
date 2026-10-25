@@ -165,3 +165,28 @@ func BenchmarkPredictParallel(b *testing.B) {
 		_ = p
 	})
 }
+
+// BenchmarkPredictGridInto is BenchmarkPredictGrid with one pair of output
+// buffers reused across calls, as a caller running the same grid size
+// repeatedly would: the difference is the 31 MB PredictGrid makes and zeroes
+// per call at 100k cells, serially, before any worker starts.
+func BenchmarkPredictGridInto(b *testing.B) {
+	for _, n := range []int{1_000, 100_000} {
+		g := benchGrid(n)
+		out, errs := make([]Prediction, n), make([]error, n)
+		b.Run(itoa(n), func(b *testing.B) {
+			for _, workers := range benchWorkers() {
+				b.Run("workers="+itoa(workers), func(b *testing.B) {
+					b.ReportAllocs()
+					opt := GridOptions{Crown: CrownCFFDRS, PointIgnition: true, Workers: workers}
+					for i := 0; i < b.N; i++ {
+						if err := PredictGridInto(out, errs, g, opt); err != nil {
+							b.Fatal(err)
+						}
+					}
+					b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N*n), "ns/cell")
+				})
+			}
+		})
+	}
+}

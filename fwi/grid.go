@@ -82,7 +82,8 @@ func (e *GridError) Error() string { return e.msg }
 //     for a raster with a masked cell.
 //
 // Cells are independent and share no state, so StepGridParallel can split the
-// grid across goroutines; StepGrid is StepGridParallel with one worker.
+// grid across goroutines; StepGrid is StepGridParallel with one worker, and
+// StepGridInto is either into slices the caller provides and may reuse.
 //
 // To chain days, pass the result's State() back in as yesterday. fwiRaster()
 // itself never chains; it does one day.
@@ -105,8 +106,63 @@ func StepGrid(yesterday GridState, w Grid, month int) (GridIndices, error) {
 // cell count is the cell count. The count is the caller's because the package
 // cannot ask: runtime.NumCPU is an import, and the package imports math alone.
 func StepGridParallel(yesterday GridState, w Grid, month, workers int) (GridIndices, error) {
+	if err := checkGrid(yesterday, w); err != nil {
+		return GridIndices{}, err
+	}
 	n := len(w.TempC)
-	for _, l := range []struct {
+	out := GridIndices{
+		make([]float64, n), make([]float64, n), make([]float64, n), make([]float64, n),
+		make([]float64, n), make([]float64, n), make([]float64, n),
+	}
+	stepInto(out, yesterday, w, month, workers)
+	return out, nil
+}
+
+// StepGridInto is StepGridParallel writing into out, whose seven slices must
+// each be as long as w.TempC, instead of into slices it makes. Every cell of
+// every slice is written, so a buffer reused from an earlier call carries
+// nothing over, and the values are StepGrid's to the bit. The refusals are
+// StepGrid's, in its order, and then out's lengths, in GridIndices' field
+// order (Layer "out.FFMC" and so on, Cell -1); a refused call writes nothing.
+//
+// out may be yesterday itself — out.FFMC the very slice yesterday.FFMC, and so
+// for DMC and DC — because a cell reads its three codes before it writes any,
+// and reads no other cell's. That steps a grid in place, which is how
+// StepGridDays chains without a buffer per day. Slices that overlap at an
+// offset, or out's slices overlapping each other or w, are not supported.
+//
+// It exists for the caller who runs the same grid size day after day. At 100k
+// cells the seven slices StepGridParallel makes are 5.6 MB, zeroed on the
+// calling goroutine before any worker starts; that was 0.67 ms of a 9.1 ms
+// call at 24 workers on the machine bench_test.go was measured on (7%), and it
+// does not shrink with more workers. workers <= 1 allocates nothing here.
+func StepGridInto(out GridIndices, yesterday GridState, w Grid, month, workers int) error {
+	if err := checkGrid(yesterday, w); err != nil {
+		return err
+	}
+	n := len(w.TempC)
+	for _, l := range [...]struct {
+		name string
+		v    []float64
+	}{
+		{"out.FFMC", out.FFMC}, {"out.DMC", out.DMC}, {"out.DC", out.DC}, {"out.ISI", out.ISI},
+		{"out.BUI", out.BUI}, {"out.FWI", out.FWI}, {"out.DSR", out.DSR},
+	} {
+		if len(l.v) != n {
+			return &GridError{Layer: l.name, Cell: -1,
+				msg: "fwi: output slice " + l.name + " differs in length from TempC"}
+		}
+	}
+	stepInto(out, yesterday, w, month, workers)
+	return nil
+}
+
+// checkGrid is StepGrid's refusal of the whole grid, in fwiRaster()'s order:
+// a layer whose length is not TempC's, then a negative precipitation, wind or
+// RH. It returns nil, not a nil *GridError, so the error interface stays nil.
+func checkGrid(yesterday GridState, w Grid) error {
+	n := len(w.TempC)
+	for _, l := range [...]struct {
 		name string
 		v    []float64
 	}{
@@ -114,11 +170,11 @@ func StepGridParallel(yesterday GridState, w Grid, month, workers int) (GridIndi
 		{"FFMC", yesterday.FFMC}, {"DMC", yesterday.DMC}, {"DC", yesterday.DC},
 	} {
 		if len(l.v) != n {
-			return GridIndices{}, &GridError{Layer: l.name, Cell: -1,
+			return &GridError{Layer: l.name, Cell: -1,
 				msg: "fwi: grid layer " + l.name + " differs in length from TempC"}
 		}
 	}
-	for _, l := range []struct {
+	for _, l := range [...]struct {
 		name, what string
 		v          []float64
 	}{
@@ -128,26 +184,26 @@ func StepGridParallel(yesterday GridState, w Grid, month, workers int) (GridIndi
 	} {
 		for i, x := range l.v {
 			if x < 0 {
-				return GridIndices{}, &GridError{Layer: l.name, Cell: i,
+				return &GridError{Layer: l.name, Cell: i,
 					msg: "fwi: negative " + l.what + " in the grid"}
 			}
 		}
 	}
+	return nil
+}
 
-	out := GridIndices{
-		make([]float64, n), make([]float64, n), make([]float64, n), make([]float64, n),
-		make([]float64, n), make([]float64, n), make([]float64, n),
-	}
+// stepInto is every cell of a checked grid, written into out, on workers
+// goroutines.
+func stepInto(out GridIndices, yesterday GridState, w Grid, month, workers int) {
 	if workers <= 1 {
 		// Not through inChunks: the closure it takes escapes to the goroutines,
 		// and what it captures with it, which would cost the serial path
 		// allocations it never had. Hence also the copies below.
-		stepCells(yesterday, w, month, out, 0, n)
+		stepCells(yesterday, w, month, out, 0, len(w.TempC))
 	} else {
-		yesterday, w, out := yesterday, w, out
-		inChunks(n, workers, func(lo, hi int) { stepCells(yesterday, w, month, out, lo, hi) })
+		out, yesterday, w := out, yesterday, w
+		inChunks(len(w.TempC), workers, func(lo, hi int) { stepCells(yesterday, w, month, out, lo, hi) })
 	}
-	return out, nil
 }
 
 // stepCells is StepGrid's cells lo to hi-1, written into out.
