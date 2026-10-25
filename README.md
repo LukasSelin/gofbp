@@ -517,7 +517,7 @@ the pinned oracle on 2026-09-18; see `ROSAtAngle`'s doc comment and
 [MIGRATION.md](MIGRATION.md).
 
 **The `Go` workflow does not run the oracle.** The 15.8 MB fixture is generated
-rather than committed, so the thirty-seven fixture-backed tests skip on a fresh clone
+rather than committed, so the thirty-eight fixture-backed tests skip on a fresh clone
 and a green `Go` badge means the identities, round-trips, invariants and NaN
 sweeps pass.
 

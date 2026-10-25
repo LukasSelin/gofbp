@@ -89,6 +89,12 @@ var fbpGridInputCols = []string{
 	"sd", "sh", "hr", "accel", "theta", "isi_in", "buieff",
 }
 
+// thetaInputCols identify a row of "theta_cases", cffdrs' two rates at a
+// bearing: kind says which, and a row carries only its kind's columns.
+var thetaInputCols = []string{
+	"kind", "fuel_type", "ffmc", "bui", "ws", "wd", "pc", "cc", "theta", "ros_in", "fros_in", "bros_in",
+}
+
 type fixture struct {
 	Oracle        string           `json:"oracle"`
 	CFFDRSVersion string           `json:"cffdrs_version"`
@@ -100,6 +106,9 @@ type fixture struct {
 	// FBPGridCases is fbpRaster()'s section, absent from every fixture older
 	// than the 2026-10-25 fbpRaster() block.
 	FBPGridCases []map[string]any `json:"fbp_grid_cases"`
+	// ThetaCases is the rate-at-a-bearing section, absent from every fixture
+	// older than the divergence register.
+	ThetaCases []map[string]any `json:"theta_cases"`
 
 	path string
 }
@@ -117,6 +126,14 @@ type colStat struct {
 	// the most interesting kind of move, so they are counted separately.
 	NullFlips int      `json:"null_flips,omitempty"`
 	Examples  []string `json:"examples,omitempty"`
+	// Divergences counts the moved cases that fall inside an entry of the
+	// divergence register, by entry id, and Unexplained the rest. A move inside
+	// an entry is cffdrs changing something somebody already adjudicated, and
+	// the entry's verdict is what to re-read. Filled in by attribute.
+	Divergences map[string]int `json:"divergences,omitempty"`
+	Unexplained int            `json:"unexplained,omitempty"`
+
+	movedKeys []string
 }
 
 type report struct {
@@ -148,19 +165,51 @@ type report struct {
 	FWI        *report `json:"fwi,omitempty"`
 	// FBPGrid is "fbp_grid_cases", fbpRaster()'s cells, carried the same way.
 	FBPGrid *report `json:"fbp_grid,omitempty"`
+	// Theta is "theta_cases", cffdrs' rates at a bearing.
+	Theta *report `json:"theta,omitempty"`
+
+	// Signatures are the register's cffdrs-wrong entries checked against the NEW
+	// fixture: does cffdrs still compute the defect each one describes? Only on
+	// the top-level report, and only when a register was read.
+	Signatures []sigStat `json:"signatures,omitempty"`
+
+	newIdx map[string]map[string]any
 }
 
-// anyMoved reports whether anything moved in this section or the ones it carries.
-// It is what the exit status is taken from.
+// anyMoved reports whether anything moved in this section or the ones it
+// carries, or whether cffdrs stopped computing a registered defect. It is what
+// the exit status is taken from.
 func (r *report) anyMoved() bool {
-	return len(r.Moved) > 0 || (r.FWI != nil && r.FWI.anyMoved()) ||
-		(r.FBPGrid != nil && r.FBPGrid.anyMoved())
+	for _, s := range r.Signatures {
+		if s.Broken > 0 {
+			return true
+		}
+	}
+	for _, s := range r.sides() {
+		if s.anyMoved() {
+			return true
+		}
+	}
+	return len(r.Moved) > 0
+}
+
+// sides are the section reports carried beside "cases".
+func (r *report) sides() []*report {
+	var out []*report
+	for _, s := range []*report{r.FWI, r.FBPGrid, r.Theta} {
+		if s != nil {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 func main() {
 	tol := flag.Float64("tol", 0, "relative tolerance below which a difference is not a move")
 	asJSON := flag.Bool("json", false, "emit the report as JSON")
 	examples := flag.Int("examples", 3, "worst-case examples to print per moved column")
+	register := flag.String("register", "", "divergence register to attribute moves to "+
+		`(default: divergences.json beside new.json, if there is one; "none" to skip)`)
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: fixture-diff [options] old.json new.json\n\n")
 		flag.PrintDefaults()
@@ -181,6 +230,14 @@ func main() {
 	}
 
 	rep := compare(oldFx, newFx, *tol, *examples)
+	reg, err := loadRegister(*register, flag.Arg(1))
+	if err != nil {
+		fatal(err)
+	}
+	if reg != nil {
+		attribute(rep, reg)
+		rep.Signatures = checkSignatures(newFx, reg)
+	}
 
 	if *asJSON {
 		enc := json.NewEncoder(os.Stdout)
@@ -314,6 +371,8 @@ func compare(oldFx, newFx *fixture, tol float64, maxExamples int) *report {
 	rep.FWI = compareSideSection("fwi_cases", oldFx.FWICases, newFx.FWICases, fwiInputCols, tol, maxExamples)
 	rep.FBPGrid = compareSideSection("fbp_grid_cases", oldFx.FBPGridCases, newFx.FBPGridCases,
 		fbpGridInputCols, tol, maxExamples)
+	rep.Theta = compareSideSection("theta_cases", oldFx.ThetaCases, newFx.ThetaCases,
+		thetaInputCols, tol, maxExamples)
 	return rep
 }
 
@@ -373,6 +432,7 @@ func compareSection(section string, oldCases, newCases []map[string]any, inputs 
 		AmbiguousOld: oldConflicts, AmbiguousNew: newConflicts,
 		DuplicateOld: oldDupes, DuplicateNew: newDupes,
 		KeyCols: keyCols,
+		newIdx:  newIdx,
 	}
 
 	// Every column either side has, key columns included — an input column that
@@ -442,6 +502,7 @@ func compareCol(col string, shared []string, oldIdx, newIdx map[string]map[strin
 				continue
 			}
 			st.Moved++
+			st.movedKeys = append(st.movedKeys, k)
 			st.MaxAbs = math.Max(st.MaxAbs, d)
 			st.MaxRel = math.Max(st.MaxRel, rel)
 			worst = append(worst, ex{k, fmt.Sprintf("%.17g -> %.17g", af, bf), d})
@@ -452,6 +513,7 @@ func compareCol(col string, shared []string, oldIdx, newIdx map[string]map[strin
 			// to the top of the examples because it is the biggest kind of move there
 			// is — the oracle started or stopped having an answer at all.
 			st.Moved++
+			st.movedKeys = append(st.movedKeys, k)
 			st.NullFlips++
 			worst = append(worst, ex{k, format(a) + " -> " + format(b), math.Inf(1)})
 		default:
@@ -459,6 +521,7 @@ func compareCol(col string, shared []string, oldIdx, newIdx map[string]map[strin
 				continue
 			}
 			st.Moved++
+			st.movedKeys = append(st.movedKeys, k)
 			worst = append(worst, ex{k, format(a) + " -> " + format(b), math.Inf(1)})
 		}
 	}
@@ -491,7 +554,7 @@ func printReport(w io.Writer, rep *report) {
 	for _, s := range []struct {
 		rep   *report
 		title string
-	}{{rep.FWI, "the FWI System"}, {rep.FBPGrid, "fbpRaster()"}} {
+	}{{rep.FWI, "the FWI System"}, {rep.FBPGrid, "fbpRaster()"}, {rep.Theta, "the rate at a bearing"}} {
 		f := s.rep
 		if f == nil {
 			continue
@@ -506,17 +569,22 @@ func printReport(w io.Writer, rep *report) {
 		}
 	}
 
+	printSignatures(w, rep.Signatures)
+
 	p("\n")
 	if !rep.anyMoved() {
 		p("No column shared by both fixtures moved.\n")
 		return
 	}
 	moved := append([]string(nil), rep.Moved...)
-	for _, f := range []*report{rep.FWI, rep.FBPGrid} {
-		if f != nil {
-			for _, c := range f.Moved {
-				moved = append(moved, f.Section+"."+c)
-			}
+	for _, f := range rep.sides() {
+		for _, c := range f.Moved {
+			moved = append(moved, f.Section+"."+c)
+		}
+	}
+	for _, s := range rep.Signatures {
+		if s.Broken > 0 {
+			moved = append(moved, "the signature of "+s.ID)
 		}
 	}
 	p("MOVED: %s\n", strings.Join(moved, ", "))
@@ -559,6 +627,15 @@ func printSection(w io.Writer, rep *report) {
 		}
 		for _, e := range c.Examples {
 			p("%-10s   %s\n", "", e)
+		}
+		if c.Divergences != nil {
+			for _, id := range sortedKeys(c.Divergences) {
+				p("%-10s   %d inside divergence %s: cffdrs moved where gofbp already departs from it — re-read that entry\n",
+					"", c.Divergences[id], id)
+			}
+			if c.Unexplained > 0 {
+				p("%-10s   %d outside every registered divergence\n", "", c.Unexplained)
+			}
 		}
 	}
 }

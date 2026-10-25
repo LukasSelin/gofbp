@@ -6,6 +6,8 @@ import (
 	"math"
 	"sort"
 	"testing"
+
+	"github.com/LukasSelin/gofbp/internal/oracle"
 )
 
 // fbpGridCase is one cell of the fixture's fbp_grid_cases: the grid it belongs
@@ -67,24 +69,26 @@ var fbpGridInputs = []string{
 // and passed to PredictGrid in one call, so what is asserted is the grid entry
 // point, not Predict cell by cell.
 //
-// Every cell is one of two things, and the test says which:
+// Every cell is one of two things, and testdata/divergences.json says which:
 //
 //   - Computed: every numeric output and FD (as 1/2/3) equal fbpRaster()'s.
-//   - Refused, where fbpRaster() filled the cell in. The refusal has to be the
-//     one that names why: ErrGridFuelCode for a code outside 1-19 (cffdrs ran
-//     C2), ErrUnknownFuel for NF and WA (cffdrs wrote zeros), ErrC6OnSlope for
-//     C6 on a slope (the Slopecalc.r gap Predict already refuses). A cell with
-//     an NA input may be refused for any reason — fbp() substituted a default
-//     there — or computed, and then it must match.
+//     That is every cell no register entry covers.
+//   - Refused, where fbpRaster() filled the cell in. A gofbp-refuses entry names
+//     the error, and the refusal has to be that one: ErrGridFuelCode for a code
+//     outside 1-19 (cffdrs ran C2), ErrUnknownFuel for NF and WA (cffdrs wrote
+//     zeros), ErrC6OnSlope for C6 on a slope. A cell with an NA input falls
+//     under a gofbp-may-refuse entry: refused for any reason, since fbp()
+//     substituted a default there, or computed, and then it must match.
 //
-// A cell with no NA input and a valid code that is refused fails the test, and
-// so does a refused cell the rules above do not explain. The all-NA cell is not
-// in the fixture: fbpRaster() shifts every later cell when given one, and the
-// generator asserts that rather than recording it (see PredictGrid).
+// A refused cell no entry covers fails the test. The all-NA cell is not in the
+// fixture: fbpRaster() shifts every later cell when given one, and the generator
+// asserts that rather than recording it (see PredictGrid, and the register's
+// grid-all-na-cell-shifts).
 //
 // ledger: fbpRaster.r
 func TestCFFDRSPredictGrid(t *testing.T) {
 	f := loadCFFDRS(t)
+	reg := loadRegister(t)
 	if len(f.FBPGrid) == 0 {
 		t.Fatal("the fixture has no fbp_grid_cases: it predates the fbpRaster() block " +
 			"(testdata/README.md lists it among the earlier digests). Regenerate it.")
@@ -163,37 +167,27 @@ func TestCFFDRSPredictGrid(t *testing.T) {
 		for i, c := range cells {
 			code := c.f("fuel_code")
 			codes[code] = true
-			hasNA := false
-			for _, k := range fbpGridInputs {
-				if math.IsNaN(c.f(k)) {
-					hasNA = true
-				}
-			}
-			fuel, valid := FuelFromGridCode(code)
-			var want error
+			fuel, _ := FuelFromGridCode(code)
+			d := reg.Find("fbp_grid_cases", gridGetter(c), "*")
 			switch {
-			case !valid:
-				want = ErrGridFuelCode
-			case fuel == "NF" || fuel == "WA":
-				want = ErrUnknownFuel
-			case fuel == "C6" && c.f("gs") > 0:
-				want = ErrC6OnSlope
-			}
-			if want != nil {
-				if !errors.Is(errs[i], want) {
-					t.Errorf("%s cell %d code %v: err = %v, want %v", id, c.Cell, code, errs[i], want)
+			case d != nil && d.Verdict == oracle.GoFBPRefuses:
+				if want := sentinelErrors[d.Error]; !errors.Is(errs[i], want) {
+					t.Errorf("%s cell %d code %v: err = %v, want %v (divergence %s)", id, c.Cell, code, errs[i], want, d.ID)
 				}
 				refused++
-				why[want.Error()]++
+				why[d.ID]++
 				continue
-			}
-			if errs[i] != nil {
-				if !hasNA {
-					t.Errorf("%s cell %d code %v: refused with no NA input and a valid code: %v", id, c.Cell, code, errs[i])
-				}
+			case d != nil && d.Verdict == oracle.GoFBPMayRefuse && errs[i] != nil:
 				refused++
 				naRefused++
-				why["NA input: "+errs[i].Error()]++
+				why[d.ID+": "+errs[i].Error()]++
+				continue
+			case d != nil && d.Verdict != oracle.GoFBPMayRefuse:
+				t.Fatalf("%s: verdict %s in fbp_grid_cases, which this test does not know how to hold", d.ID, d.Verdict)
+			case errs[i] != nil:
+				t.Errorf("%s cell %d code %v: refused, and no entry in %s explains it: %v",
+					id, c.Cell, code, registerPath, errs[i])
+				refused++
 				continue
 			}
 			computed++

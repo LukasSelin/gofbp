@@ -143,6 +143,10 @@ type cffdrsFixture struct {
 	// FBPGrid is fbpRaster()'s section, read by grid_cffdrs_test.go. Absent
 	// from every fixture older than the fbpRaster() block.
 	FBPGrid []fbpGridCase `json:"fbp_grid_cases"`
+	// Theta is the rate-at-a-bearing section: cffdrs' two defective rates, recorded
+	// so testdata/divergences.json can be held against them. Read by
+	// TestCFFDRSDivergences; absent from every fixture older than the register.
+	Theta []map[string]any `json:"theta_cases"`
 }
 
 // ourFuel maps a cffdrs fuel name onto this package's key. cffdrs spells the
@@ -304,18 +308,28 @@ func TestCFFDRSInitialSpreadIndex(t *testing.T) {
 // of the current script would change that. TestUpslopeConventionIsAspectPlus180
 // and TestNetEffectiveWindRotationalInvariance carry that half.
 //
-// C6 is excluded for the same reason as in TestCFFDRSSurfaceROS: it is the one
-// fuel whose reported ROS is not the surface rate. See crownChangesROS.
+// Sloped C6 is not excluded by name. It is the register's c6-on-slope entry:
+// cffdrs' back-solve for C6 inverts the crown-blended rate, so its WSV is a
+// number NetEffectiveWind does not compute for any fuel, and Predict refuses
+// rather than disagree. The ROS comparison keeps crownChangesROS on top of that,
+// for the separate reason TestCFFDRSSurfaceROS does: C6's reported ROS is not
+// the surface rate, and would not be even if the entry were resolved.
 //
 // ledger: Slopecalc.r
 func TestCFFDRSSlopeBackSolve(t *testing.T) {
 	f := loadCFFDRS(t)
+	reg := loadRegister(t)
 	const tol = 1e-9
 	perFuel := map[string]int{}
+	divergent := map[string]int{}
 	n, shown := 0, 0
 	var worstWSV, worstROS float64
 	for i, c := range f.Cases {
-		if c.GS <= 0 || crownChangesROS(c) {
+		if c.GS <= 0 {
+			continue
+		}
+		if d := reg.Find("cases", caseGetter(c), "wsv"); d != nil {
+			divergent[d.ID]++
 			continue
 		}
 		fuel := ourFuel(c.Fuel)
@@ -339,6 +353,9 @@ func TestCFFDRSSlopeBackSolve(t *testing.T) {
 			}
 		}
 
+		if crownChangesROS(c) {
+			continue
+		}
 		ros, _ := slopeAdjustedROS(s, c.BUI)
 		if rel := relErr(ros, c.ROS); rel > worstROS {
 			worstROS = rel
@@ -363,6 +380,9 @@ func TestCFFDRSSlopeBackSolve(t *testing.T) {
 		t.Logf("%-4s %5d sloped cases", fuel, perFuel[fuel])
 	}
 	t.Logf("%d sloped cases; worst relative error: WSV %.3g, ROS %.3g", n, worstWSV, worstROS)
+	for id, k := range divergent {
+		t.Logf("%d sloped cases held by the register's %s instead", k, id)
+	}
 
 	// A floor, not a formality. If a fixture regeneration drops or renames the
 	// sloped sweep, every loop above simply skips and the test passes green

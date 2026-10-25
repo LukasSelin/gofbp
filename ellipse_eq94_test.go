@@ -3,6 +3,8 @@ package fbp
 import (
 	"math"
 	"testing"
+
+	"github.com/LukasSelin/gofbp/internal/oracle"
 )
 
 // ROSAtAngle against the PUBLISHED eq. 94 — Wotton, Alexander & Taylor (2009),
@@ -29,15 +31,12 @@ import (
 // Figure 7: "the line that joins the ignition point or origin of the fire to
 // point P"), which is ROSAtAngle's convention.
 
-// eq94Published is the equation as printed, transcribed term for term. It is
-// 0/0 at exactly θ = 90° and 270°, as the paper says.
-func eq94Published(ros, fros, bros, thetaDeg float64) float64 {
-	t := thetaDeg * math.Pi / 180
-	c, s := math.Cos(t), math.Sin(t)
-	num := fros*c*math.Sqrt(fros*fros*c*c+ros*bros*s*s) - (ros*ros-bros*bros)/4*s*s
-	den := fros*fros*c*c + ((ros+bros)/2)*((ros+bros)/2)*s*s
-	return (ros-bros)/(2*c) + (ros+bros)/(2*c)*(num/den)
-}
+// eq94Published is the equation as printed, transcribed term for term, and
+// 0/0 at exactly θ = 90° and 270°, as the paper says. The transcription lives in
+// internal/oracle, where it is also testdata/divergences.json's reference for
+// cffdrs' two rates at a bearing: one copy, so the unconditional tests here and
+// the oracle tests cannot hold ROSAtAngle to two different readings of the paper.
+var eq94Published = oracle.EQ94Published
 
 // The paper's Table 3: C-2, level ground, FFMC 92, wind 15 km/h, BUI 64, giving
 // ROS 17.16, FROS 4.88, BROS 2.16 m/min. The tolerance is the table's own

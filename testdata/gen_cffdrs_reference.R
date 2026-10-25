@@ -1157,6 +1157,74 @@ if (!isTRUE(all.equal(unname(shifted), unname(clean[c(1, 3, 4, 5, 1)]))))
   stop("fbpRaster() no longer shifts the cells after an all-NA cell; ",
        "update this block and PredictGrid's doc comment together")
 
+# === The rate at a bearing: cffdrs' answers, recorded BECAUSE they are wrong ==
+#
+# A third section, "theta_cases", and the one place this fixture records numbers
+# the Go side does not reproduce. Both of cffdrs' rates at a bearing are
+# defective (MIGRATION.md, rate_of_spread_at_theta.r and the known gaps):
+#
+#   kind "fbp"   fbp()'s TROS, which is ROS(1-E)/(1-E cos(THETA - RAZ)) with
+#                THETA already in radians and RAZ still in degrees
+#   kind "eq94"  rate_of_spread_at_theta() called directly, whose one misplaced
+#                parenthesis multiplies BOTH leading terms of GLC-X-10 eq. 94 by
+#                the bracket, collapsing them to ROS / cos(THETA)
+#
+# They are emitted so the divergence register (testdata/divergences.json) can
+# hold them both ways: the Go side asserts that cffdrs still computes exactly
+# the defect the register describes, and that gofbp computes what the paper
+# prints instead. A cffdrs that fixes either one fails the first assertion, which
+# is the point -- the register's verdict is then out of date, and that is a
+# thing for a human to re-read, not a number to re-record.
+#
+# The fuel column is fuel_type, not fuel, for the same reason the grid block's is
+# fuel_code: "fuel" keys are how the FBP case count is taken.
+theta_rows <- list()
+TH_DEG <- seq(0, 330, by = 30)
+TH_FUELS <- list(list(f = "C2"), list(f = "C3"), list(f = "D1"),
+                 list(f = "M1", pc = 50), list(f = "O1a", cc = 80), list(f = "S1"))
+TH_WEATHER <- list(list(ffmc = 92, bui = 64, ws = 15), list(ffmc = 88, bui = 40, ws = 30))
+for (fu in TH_FUELS) for (w in TH_WEATHER) for (wd in c(0, 135)) {
+  n <- length(TH_DEG)
+  ti <- data.frame(id = seq_len(n), FuelType = fu$f, LAT = 55, LONG = -120, ELV = 0,
+                   FFMC = w$ffmc, BUI = w$bui, WS = w$ws, WD = wd, GS = 0, Dj = 180,
+                   Aspect = 0, PC = if (is.null(fu$pc)) 0 else fu$pc, PDF = 0,
+                   CC = if (is.null(fu$cc)) 0 else fu$cc, GFL = 0.35, CBH = -1, CFL = -1,
+                   FMC = 0, D0 = 0, SD = 0, SH = 0, hr = 1, theta = TH_DEG, Accel = 0,
+                   montane = 0, ISI = 0, BUIEff = 1, stringsAsFactors = FALSE)
+  to <- suppressWarnings(fbp(ti, output = "ALL"))
+  theta_rows[[length(theta_rows) + 1]] <- data.frame(
+    kind = "fbp", fuel_type = fu$f, ffmc = w$ffmc, bui = w$bui, ws = w$ws, wd = wd,
+    pc = ti$PC, cc = ti$CC, theta = TH_DEG,
+    ros = to$ROS, fros = to$FROS, bros = to$BROS, lb = to$LB, raz = to$RAZ, tros = to$TROS,
+    stringsAsFactors = FALSE)
+}
+# GLC-X-10's Table 3 triple first, then a spread of shapes. 15-degree steps put
+# rows at exactly 90 and 270, where cos() is 6e-17 rather than 0 -- so cffdrs'
+# c1 == 0 guard does not fire and its collapsed form returns ~1e17 m/min. That
+# pole is the most visible symptom of the defect, so it is recorded, not skipped.
+EQ_SHAPES <- list(c(17.16, 4.88, 2.16))
+for (ros in c(0.5, 3, 60)) for (br in c(0.1, 0.3)) for (lb in c(1.5, 3)) {
+  bros <- ros * br
+  EQ_SHAPES[[length(EQ_SHAPES) + 1]] <- c(ros, (ros + bros) / (2 * lb), bros)
+}
+EQ_DEG <- seq(0, 345, by = 15)
+for (s in EQ_SHAPES) {
+  theta_rows[[length(theta_rows) + 1]] <- data.frame(
+    kind = "eq94", ros_in = s[1], fros_in = s[2], bros_in = s[3], theta = EQ_DEG,
+    ros_theta = cffdrs:::rate_of_spread_at_theta(s[1], s[2], s[3], EQ_DEG * pi / 180),
+    stringsAsFactors = FALSE)
+}
+TH_COLS <- unique(unlist(lapply(theta_rows, names)))
+theta_body <- paste(unlist(lapply(theta_rows, function(d) vapply(seq_len(nrow(d)), function(i) {
+  parts <- character(0)
+  for (col in TH_COLS) {
+    if (!(col %in% names(d))) next
+    v <- d[[col]][i]
+    parts <- c(parts, paste0('"', col, '": ', if (is.character(v)) q(v) else num(v)))
+  }
+  paste0('  {', paste(parts, collapse = ", "), '}')
+}, character(1)))), collapse = ",\n")
+
 FG <- do.call(rbind, fbp_grid_rows)
 fg_json <- function(i) {
   parts <- character(0)
@@ -1204,7 +1272,8 @@ json <- paste0(
   ' "r_version": ', q(R.version.string), ',\n',
   ' "cases": [\n', body, '\n ],\n',
   ' "fwi_cases": [\n', fwi_body, '\n ],\n',
-  ' "fbp_grid_cases": [\n', fbp_grid_body, '\n ]\n}\n'
+  ' "fbp_grid_cases": [\n', fbp_grid_body, '\n ],\n',
+  ' "theta_cases": [\n', theta_body, '\n ]\n}\n'
 )
 
 dir.create(dirname(OUT), recursive = TRUE, showWarnings = FALSE)
@@ -1221,3 +1290,5 @@ cat(sprintf("wrote %d FWI System cases (fwi_cases):\n", nrow(FW)))
 for (k in unique(FW$kind)) cat(sprintf("  %-9s %d\n", k, sum(FW$kind == k)))
 cat(sprintf("wrote %d fbpRaster() cells (fbp_grid_cases) in %d grids\n",
             nrow(FG), length(unique(FG$grid))))
+cat(sprintf("wrote %d rate-at-a-bearing rows (theta_cases)\n",
+            sum(vapply(theta_rows, nrow, integer(1)))))
