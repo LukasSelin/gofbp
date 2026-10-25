@@ -120,6 +120,33 @@ That spread — 45 m/min at the head against 0.71 at the back — is why the hea
 rate alone is the wrong number for "how fast is this coming at *me*". See
 `example_test.go`, which is this program and is run by the test suite.
 
+## The driver: `Predict`
+
+One call that composes everything above the way `cffdrs::fbp()` does, for one
+stand — and, unlike `fbp()`, defaults nothing. Every input `fbp()` would quietly
+replace is an error here, and the two lookups it would quietly apply are
+opt-ins you name:
+
+```go
+p, err := fbp.Predict(fbp.Input{
+	Fuel: "C2", FFMC: 92, BUI: 40,
+	WindKmh: 30, WindAzimuthDeg: 180, // towards: fbp()'s WD + 180
+	PC: 50, PDF: 35, CuringPct: 80,
+	Site:  &fbp.Site{Lat: 55, Long: -120, DayOfYear: 180}, // opt in: FMC from the site
+	Crown: fbp.CrownCFFDRS, CBH: -1, CFL: -1,              // opt in: the published tables
+	ElapsedMin: 60, PointIgnition: true,
+})
+// p.ROS, p.CFB, p.FD, p.HFI, p.RAZ, p.TFC, … p.DH, p.TI
+```
+
+Leave `Crown` unset and `Predict` returns `ErrCrownUnset`; leave out both `FMC`
+and `Site` for a fuel with a crown and it returns `ErrNoFMC`; give a grass fuel
+no `GrassFuelLoad` and it returns `ErrNoGrassLoad`. It refuses C6 on sloped
+ground (`ErrC6OnSlope`) rather than disagree with cffdrs for a reason you
+cannot see — see below — and it does not compute the rate at a bearing, which
+`ROSAtAngle` does from its head, flank and back rates. Asserted against
+`fbp()` on every row of the reference sweep.
+
 ## What is implemented
 
 - `CanonicalFuelCode` — folds a fuel code to the table's spelling and says
@@ -147,6 +174,28 @@ rate alone is the wrong number for "how fast is this coming at *me*". See
 - `CrownFuelConsumption` (CFC) and `TotalFuelConsumption` (TFC) — the crown fuel
   a fire consumed and the surface-plus-crown total, with the M1/M2 percent-conifer
   and M3/M4 percent-dead-fir weightings the 2009 revision added
+- The published per-fuel crown defaults, as a lookup you opt into:
+  `DefaultCrownBaseHeight` and `DefaultCrownFuelLoad` return the table values;
+  `CrownBaseHeight` and `CrownFuelLoad` reproduce what `cffdrs::fbp()` does with
+  a supplied value — keep it if it is in range ((0, 50] m, (0, 2] kg/m²),
+  otherwise substitute the table, or for C6 with stand data
+  `C6StandCrownBaseHeight`. `Crown` calls none of them:
+
+  ```go
+  cbh, _ := fbp.DefaultCrownBaseHeight("C3") // 8 m
+  cfl, _ := fbp.DefaultCrownFuelLoad("C3")   // 1.15 kg/m²
+  cfb := fbp.CrownFractionBurned(fbp.Crown{FMC: fmc, SFC: sfc, CBH: cbh, CFL: cfl, SurfaceROS: rss})
+  ```
+- The acceleration model for a point ignition: `AccelerationAlpha` (eq. 72),
+  `ROSAtTime` (eq. 70), `DistanceAtTime` (eq. 71) and `LengthToBreadthAtTime`
+  (GLC-X-10 eq. 81). Time is **minutes** since ignition — `cffdrs::fbp()` takes
+  hours and multiplies by 60. Pass the head fire's CFB for every rate, back
+  included, to match `fbp()`
+- `Predict` — the whole prediction in one call; see [The driver](#the-driver-predict)
+- `FireIntensity` — Byram's fireline intensity, `300·FC·ROS` kW/m (eq. 69).
+  The head fire intensity HFI is `FireIntensity(TotalFuelConsumption(…), ros)`,
+  where `ros` is the surface rate for sixteen fuels and `C6CrownFire`'s blended
+  rate for C6 — exactly how `cffdrs::fbp()` computes its `HFI` column
 
 ## The FWI System: package `fwi`
 
@@ -286,10 +335,12 @@ C6 is the seventeenth, and it has its own call — see
 signature has nowhere to put the FMC, SFC, CBH and CFL the blend needs.
 
 You supply the inputs. `Crown` takes foliar moisture content (FMC), surface fuel
-consumption (SFC), crown base height (CBH) and crown fuel load (CFL). CBH and CFL
-have no source in this package at all. FMC and SFC do — `FoliarMoistureContent`
-and `SurfaceFuelConsumption` compute them — but `Crown` still will not call either
-for you: one would have to invent a grass fuel load, the other a location and a
+consumption (SFC), crown base height (CBH) and crown fuel load (CFL). All four
+have a source in this package — `FoliarMoistureContent`, `SurfaceFuelConsumption`,
+and the published per-fuel CBH/CFL tables behind `DefaultCrownBaseHeight` and
+`DefaultCrownFuelLoad` — but `Crown` will not call any of them for you. For the
+two tables the reason is that a stand you have measured should not be quietly
+replaced by a published average; for the other two: one would have to invent a grass fuel load, the other a location and a
 date.
 
 ```go
@@ -350,15 +401,13 @@ rate from the full slope path, not `ROS`'s `RSI · BE · SF` product.
 unimplemented fuel comes back as a spread rate of zero, so screen codes with
 `CanonicalFuelCode` rather than reading the number.
 
-**The per-fuel crown tables.** The published per-fuel CBH and CFL defaults are
-absent. FMC and SFC are no longer on this list — `FoliarMoistureContent` and
-`SurfaceFuelConsumption` are both ported and oracle-asserted — but they are
-functions you call, not defaults `Crown` applies. The CBH/CFL gap has teeth:
-there is no crown base height or crown fuel load source inside this package, so a
-caller must bring its own — and CFL is what keeps the fuels with no crown (D1,
-S1–S3, O1A, O1B) reporting zero. `CrownFuelConsumption` inherits that exactly:
-it multiplies by the CFL you hand it and applies no per-fuel gate of its own, so
-passing the published 0 for those fuels is what gives you 0 back.
+**Defaults applied for you.** The per-fuel CBH and CFL tables, FMC and SFC are all
+ported and oracle-asserted, but every one of them is a function you call, never a
+default `Crown` applies. That is deliberate and it will stay that way; the one
+consequence worth knowing is that CFL is what keeps the fuels with no crown (D1,
+S1–S3, O1A, O1B) reporting zero, so a caller supplying their own CFL for those
+fuels is overriding the published 0. `CrownFuelConsumption` inherits that: it
+multiplies by the CFL you hand it and applies no per-fuel gate of its own.
 
 **C6 on sloped ground.** C6's crown rate of spread is implemented (above), but
 the slope back-solve for that fuel is not, and the two are separate gaps.
@@ -369,10 +418,11 @@ with FMC and CBH, and no surface-only inversion reproduces it.
 exactly; on a slope, feed `C6CrownFire` an ISI you trust rather than one
 back-solved here.
 
-Also absent: HFI, the acceleration model, and everything else `cffdrs::fbp()`
-returns that is not spread geometry. CFC and TFC came off this list on
-2026-09-20; HFI is `300·TFC·ROS` and is the one thing that was genuinely waiting
-on them.
+Also absent: the rate at a bearing among `cffdrs::fbp()`'s outputs (TROS and
+everything built on it — see `ROSAtAngle`), and `fbp()`'s ISI override and
+BUIEFF switch. The flank and back intensities came off this list with
+`Predict`. HFI came off
+this list on 2026-10-21 (`FireIntensity`, above).
 
 The three paragraphs above are a summary. [MIGRATION.md](MIGRATION.md) is the
 full account: every file in `cffdrs`'s `R/` with a status, what is deliberately
@@ -443,7 +493,7 @@ the pinned oracle on 2026-09-18; see `ROSAtAngle`'s doc comment and
 [MIGRATION.md](MIGRATION.md).
 
 **The `Go` workflow does not run the oracle.** The 15.8 MB fixture is generated
-rather than committed, so the twenty-eight fixture-backed tests skip on a fresh clone
+rather than committed, so the thirty-five fixture-backed tests skip on a fresh clone
 and a green `Go` badge means the identities, round-trips, invariants and NaN
 sweeps pass.
 

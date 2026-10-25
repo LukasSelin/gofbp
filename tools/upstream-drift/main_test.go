@@ -3,6 +3,8 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -25,6 +27,41 @@ func classified(t *testing.T, files ...changedFile) *report {
 	return rep
 }
 
+// owedRow is the row owedLedger reopens. Since 2026-10-21 the real ledger has
+// nothing 🔴 or 🟡 in its R/ table, so the "a row still owed changed" path has
+// no real row to exercise it; this puts one back, in a copy, without changing
+// what the real ledger claims.
+const owedRow = "rate_of_spread_at_theta.r"
+
+// owedLedger is the real ledger with owedRow set back to 🟡.
+func owedLedger(t *testing.T) *ledger.Ledger {
+	t.Helper()
+	raw, err := os.ReadFile("../../MIGRATION.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const was, now = "| ROS at an arbitrary bearing | 🟢 |", "| ROS at an arbitrary bearing | 🟡 |"
+	if !strings.Contains(string(raw), was) {
+		t.Fatalf("%s's row no longer reads %q; update owedLedger", owedRow, was)
+	}
+	path := filepath.Join(t.TempDir(), "MIGRATION.md")
+	if err := os.WriteFile(path, []byte(strings.Replace(string(raw), was, now, 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	l, err := ledger.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return l
+}
+
+func classifiedOwed(t *testing.T, files ...changedFile) *report {
+	t.Helper()
+	rep := &report{}
+	classify(rep, files, owedLedger(t))
+	return rep
+}
+
 func in(rep *report, file string) (change, bool) {
 	for _, c := range rep.InR {
 		if c.File == file {
@@ -34,23 +71,28 @@ func in(rep *report, file string) (change, bool) {
 	return change{}, false
 }
 
-// The join is the whole tool. These are the four answers step 2 asks for, against
-// the real ledger, so a row moving between statuses changes what this reports.
+// The join is the whole tool. These are the answers step 2 asks for, against the
+// real ledger, so a row moving between statuses changes what this reports. There
+// has been no 🔴 row to join to since 2026-10-21, when the acceleration model
+// and the driver were ported; the 🟡 rows are what is still owed, and they rank
+// with 🔴 (see severity).
 func TestChangedFileJoinsToItsLedgerRow(t *testing.T) {
 	rep := classified(t,
 		changedFile{"R/rate_of_spread.r", "modified"},          // ✅
-		changedFile{"R/rate_of_spread_at_time.r", "modified"},  // 🔴
+		changedFile{"R/rate_of_spread_at_time.r", "modified"},  // ✅, a three-file row
+		changedFile{"R/fbp.r", "modified"},                     // ✅, the driver
 		changedFile{"R/hffmc.r", "modified"},                   // ⚪
 		changedFile{"R/direction.r", "modified"},               // 🟢
-		changedFile{"R/rate_of_spread_at_theta.r", "modified"}, // 🟡
+		changedFile{"R/rate_of_spread_at_theta.r", "modified"}, // 🟢
 	)
 
 	for _, tc := range []struct{ file, want string }{
 		{"rate_of_spread.r", ledger.Ported},
-		{"rate_of_spread_at_time.r", ledger.Missing},
+		{"rate_of_spread_at_time.r", ledger.Ported},
+		{"fbp.r", ledger.Ported},
 		{"hffmc.r", ledger.OutOfScope},
 		{"direction.r", ledger.Invariant},
-		{"rate_of_spread_at_theta.r", ledger.Partial},
+		{"rate_of_spread_at_theta.r", ledger.Invariant},
 	} {
 		c, ok := in(rep, tc.file)
 		if !ok {
@@ -66,9 +108,9 @@ func TestChangedFileJoinsToItsLedgerRow(t *testing.T) {
 // "A silently-changed reference number outranks any new feature." The exit code
 // is how a scheduled run acts on that without reading prose.
 func TestVerdictRanksAnAssertedRowAboveEverythingElse(t *testing.T) {
-	asserted := classified(t,
+	asserted := classifiedOwed(t,
 		changedFile{"R/hffmc.r", "modified"},
-		changedFile{"R/rate_of_spread_at_time.r", "modified"},
+		changedFile{"R/rate_of_spread_at_theta.r", "modified"},
 		changedFile{"R/buildup_effect.r", "modified"}, // ✅
 	)
 	if asserted.Exit != exitAsserted {
@@ -78,12 +120,12 @@ func TestVerdictRanksAnAssertedRowAboveEverythingElse(t *testing.T) {
 		t.Errorf("report leads with %q; the ✅ row must sort first", first)
 	}
 
-	owed := classified(t,
+	owed := classifiedOwed(t,
 		changedFile{"R/hffmc.r", "modified"},
-		changedFile{"R/rate_of_spread_at_time.r", "modified"},
+		changedFile{"R/rate_of_spread_at_theta.r", "modified"},
 	)
 	if owed.Exit != exitInScope {
-		t.Errorf("exit = %d, want %d (only a 🔴 row changed)", owed.Exit, exitInScope)
+		t.Errorf("exit = %d, want %d (only a row still owed changed)", owed.Exit, exitInScope)
 	}
 
 	quiet := classified(t,
@@ -134,8 +176,8 @@ func TestAFileWithTwoRowsReportsBoth(t *testing.T) {
 // is stale, which is a worse state than a known row being behind — nobody has
 // decided whether it is in scope.
 func TestAnUnknownRFileOutranksARowStillOwed(t *testing.T) {
-	rep := classified(t,
-		changedFile{"R/rate_of_spread_at_time.r", "modified"},
+	rep := classifiedOwed(t,
+		changedFile{"R/rate_of_spread_at_theta.r", "modified"},
 		changedFile{"R/fire_growth.r", "added"},
 	)
 	c, ok := in(rep, "fire_growth.r")
@@ -146,7 +188,7 @@ func TestAnUnknownRFileOutranksARowStillOwed(t *testing.T) {
 		t.Error("fire_growth.r was matched to a row it cannot have")
 	}
 	if rep.InR[0].File != "fire_growth.r" {
-		t.Errorf("report leads with %q; an unknown R/ file must sort above a 🔴 row", rep.InR[0].File)
+		t.Errorf("report leads with %q; an unknown R/ file must sort above a row still owed", rep.InR[0].File)
 	}
 	if rep.Exit != exitInScope {
 		t.Errorf("exit = %d, want %d", rep.Exit, exitInScope)

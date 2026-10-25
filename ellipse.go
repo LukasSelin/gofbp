@@ -133,15 +133,21 @@ func FlankROS(rosHead, rosBack, lb float64) float64 {
 //     collapse to ROS/cosθ, which puts a pole at θ = 90°; the ifelse(c1 == 0, …)
 //     guard never fires there because cos(π/2) is 6.12e-17, not 0. It returns
 //     -2.34e17 at 90°, negative rates from 30° to 89.9°, and ROS at BOTH 0° and
-//     180°, so BROS is never recovered. Whether the published equation reads the
-//     same way was NOT checked — that needs the paper, and it is the difference
-//     between a cffdrs transcription error and one in ST-X-3's successor.
+//     180°, so BROS is never recovered. **Checked against the paper on
+//     2026-10-21: that is cffdrs' transcription, not the published equation.**
+//     GLC-X-10 (p. 20) multiplies only the SECOND leading term by the bracketed
+//     fraction; cffdrs parenthesises both leading terms together first. One
+//     misplaced parenthesis is the whole defect.
 //
-// So this function is pinned by the two exact identities above plus the shape
-// assertions (TestROSAtAngle*), which together determine the curve at its
-// endpoints and forbid every plausible transcription error in between. On the
-// case measured above it returns ROS at 0° and 0.9674577 at 180°, which is BROS
-// to seven figures — neither upstream quantity does that.
+// So the reference this function is asserted against is the paper itself, and
+// the ledger row is 🟢 — ported, with no cffdrs column that could be its oracle.
+// ROSAtAngle IS the published eq. 94: it solves the same ray-from-ignition-point
+// intersection the closed form expresses, agrees with it to 7.9e-13 across a
+// 46,016-point grid (TestROSAtAngleIsPublishedEquation94), is defined at 90°
+// where the printed form is 0/0 and returns that 0/0's limit, and reproduces all
+// thirteen rows of GLC-X-10's Table 3 to the table's printed precision
+// (TestROSAtAngleReproducesGLCX10Table3). The identities and shape assertions
+// (TestROSAtAngle*) still pin the endpoints and the curve between them.
 func ROSAtAngle(rosHead, rosFlank, rosBack, thetaDeg float64) float64 {
 	if rosHead <= 0 {
 		return 0

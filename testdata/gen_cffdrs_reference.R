@@ -97,12 +97,14 @@ GRASS <- c("O1a", "O1b")
 # those and it is silently replaced by the table, which is the same trap again.
 base_row <- function(fuel, ffmc, bui, ws, gs, pc = 50, pdf = 35, cc = 80,
                      cbh = -1, cfl = -1, lat = 60, dj = 200,
-                     long = 15, elv = 0, d0 = 0) {
+                     long = 15, elv = 0, d0 = 0, sd = 0, sh = 0,
+                     wd = 0, hr = 1, accel = 0) {
   data.frame(
     FuelType = fuel, LAT = lat, LONG = long, ELV = elv, Dj = dj, D0 = d0,
-    FFMC = ffmc, BUI = bui, WS = ws, WD = 0, GS = gs, Aspect = 0,
+    FFMC = ffmc, BUI = bui, WS = ws, WD = wd, GS = gs, Aspect = 0,
     PC = pc, PDF = pdf, cc = cc, GFL = 0.35, CBH = cbh, CFL = cfl,
-    hr = 1, theta = 0, Accel = 0, montane = 0,
+    SD = sd, SH = sh,
+    hr = hr, theta = 0, Accel = accel, montane = 0,
     stringsAsFactors = FALSE
   )
 }
@@ -380,6 +382,87 @@ for (cfl in CFC_CFL_VALUES) {
   }
 }
 
+# CBH and CFL defaults: what fbp() substitutes, and when.
+#
+# Neither crown_base_height() nor crown_fuel_load() is an fbp() output, so this
+# block cannot emit them. What it can do is make the CSI and CFC columns depend
+# on every branch of both, so the Go side can assert them FORWARD: CSI is eq. 56
+# of whatever CBH fbp() settled on, and CFC is eq. 66 of whatever CFL it did.
+# The thousands of sentinel (-1) rows above already reach the two tables. What
+# nothing above reaches:
+#
+#   the substitution TRIGGERS other than -1. crown_base_height substitutes for
+#        CBH <= 0, > 50 or NA; crown_fuel_load for CFL <= 0, > 2 or NA. CBH 0 and
+#        60 and CFL 0 and 3 are substituted; CBH 50 and CFL 2 are the inclusive
+#        upper bounds and must be honoured verbatim. A mistranscribed < for <=
+#        shows up on exactly these rows. Every fuel, so the table is reached
+#        through each trigger and not only through -1.
+#   C6's STAND branch. For C6 with stand density SD > 0 and stand height SH > 0
+#        the substitute is -11.2 + 1.06*SH + 0.0017*SD rather than the table, and
+#        a negative result is floored at 1e-7. fbp() screens both first: SD
+#        outside [0, 1e5] and SH outside [0, 100] become -999, which fails the
+#        > 0 test and falls back to the table. The grid below reaches the
+#        equation, the floor (SH 5 with small SD), both screens (SD 150000,
+#        SH 150), both inclusive bounds (SD 1e5, SH 100), and a supplied CBH 10
+#        that must win over the equation.
+#
+# FFMC 95, WS 30 and BUI 60 on flat ground make most of these rows crown, which
+# is what puts CFL into CFC at all. sd and sh are new INPUT columns; every row
+# above sends 0 for both, which is fbp()'s own default when they are absent, so
+# no existing number can move. The stand rows differ only in sd, sh and cbh, and
+# tools/fixture-diff cannot key on sd/sh against a fixture that predates them --
+# so each gets its own latitude, as the FMC block's sites do.
+DEF_CBH_CFL <- list(c(0, 0), c(60, 3), c(50, 2))
+for (fuel in c(SIMPLE, MIXED_PC, MIXED_PDF, GRASS)) {
+  for (cc in DEF_CBH_CFL) {
+    add(base_row(fuel, 95, 60, 30, 0, cbh = cc[1], cfl = cc[2], lat = 45, dj = 175))
+  }
+}
+C6_SD_VALUES <- c(0, 500, 2000, 50000, 1e5, 150000)
+C6_SH_VALUES <- c(0, 5, 15, 30, 100, 150)
+k <- 0L
+for (cbh in c(-1, 10)) for (sd in C6_SD_VALUES) for (sh in C6_SH_VALUES) {
+  add(base_row("C6", 95, 60, 30, 0, cbh = cbh, lat = 30 + 0.5 * k, dj = 175,
+               sd = sd, sh = sh))
+  k <- k + 1L
+}
+
+# The acceleration model: a point-source fire growing towards equilibrium.
+#
+# fbp() gates every time-dependent column on ACCEL, and every row above sends
+# Accel = 0 and hr = 1 -- so until this block HROSt, BROSt, FROSt, LBt, DH, DB and
+# DF all carried their equilibrium values, and eqs. 70/71/72 and Wotton (2009)
+# eq. 81 were unreachable. This block sends Accel = 1 and sweeps the two things
+# the model is a function of besides the equilibrium rate:
+#
+#   hr   elapsed hours. fbp() multiplies by 60 (HR <- HR * 60), so the model runs
+#        in MINUTES and this column is in hours as sent. 0 is the ignition
+#        instant (every rate 0, LBt 1); 6 h is past 99 % of equilibrium for the
+#        slowest alpha. The short times are where the curvature is.
+#   CFB  through eq. 72's closed-canopy form, 0.115 - 18.8*CFB^2.5*exp(-8*CFB),
+#        which is not monotone in CFB (alpha is lowest near CFB = 0.3125). FFMC,
+#        WS and CBH 2/20 together put rows at CFB 0, intermediate and near 1.
+#        The open fuels -- C1, D1, S1-S3, O1A, O1B -- take alpha = 0.115
+#        whatever CFB is, and are here so that branch is asserted too.
+#
+# Every fuel, flat ground, explicit CBH/CFL inside the honoured ranges so the Go
+# side can run the chain end to end. hr and accel are new INPUT keys that a
+# fixture older than this block does not carry, so -- as the FMC and stand
+# blocks do with latitude -- each hour gets its own wind DIRECTION. On flat
+# ground WD moves only RAZ, never ROS/BROS/LB, and no other block sends these
+# directions, so the rows stay distinct under the old key and nothing they
+# assert depends on the trick.
+ACC_HR_VALUES <- c(0, 0.05, 0.25, 0.5, 1, 2, 6)
+ACC_WEATHER <- list(c(85, 5), c(92, 15), c(95, 30))   # (FFMC, WS)
+for (fuel in c(SIMPLE, MIXED_PC, MIXED_PDF, GRASS)) {
+  for (w in ACC_WEATHER) for (cbh in c(2, 20)) {
+    for (h in seq_along(ACC_HR_VALUES)) {
+      add(base_row(fuel, w[1], 60, w[2], 0, cbh = cbh, cfl = 1, lat = 45,
+                   dj = 175, wd = 5 + 10 * h, hr = ACC_HR_VALUES[h], accel = 1))
+    }
+  }
+}
+
 inp <- do.call(rbind, rows)
 # Carry an explicit ID. Without one, fbp() auto-assigns 1..n and returns its rows
 # sorted by ID as a STRING -- for n > 9 that is 1, 10, 100, 1000, 2, ... and reading
@@ -413,7 +496,9 @@ if (!identical(as.integer(as.character(out$ID)), inp$ID)) {
 # foliar_moisture_content()'s, so those rows say nothing about eqs. 1-8 and the Go
 # side skips them by name.
 needed <- c("ISI", "BE", "SF", "WSV", "CFB", "FD", "ROS", "LB", "BROS", "FROS",
-            "FMC", "SFC", "CSI", "RSO", "CFC", "TFC")
+            "FMC", "SFC", "CSI", "RSO", "CFC", "TFC", "HFI",
+            "HROSt", "BROSt", "FROSt", "LBt", "DH", "DB", "DF",
+            "RAZ", "FCFB", "BCFB", "FTFC", "BTFC", "FFI", "BFI", "TI", "FTI", "BTI")
 missing <- setdiff(needed, names(out))
 if (length(missing)) {
   stop("cffdrs ", packageVersion("cffdrs"), " did not return: ",
@@ -465,6 +550,15 @@ case_json <- function(i) {
     ', "long": ', num(inp$LONG[i]),
     ', "elv": ', num(inp$ELV[i]),
     ', "d0": ', num(inp$D0[i]),
+    # SD and SH are C6's stand density (stems/ha) and stand height (m), the
+    # inputs to crown_base_height's stand branch. 0 everywhere but the CBH/CFL
+    # defaults block.
+    ', "sd": ', num(inp$SD[i]),
+    ', "sh": ', num(inp$SH[i]),
+    # hr is HOURS as sent (fbp() converts to minutes); accel is 0 or 1. Every
+    # row outside the acceleration block sends hr = 1, accel = 0.
+    ', "hr": ', num(inp$hr[i]),
+    ', "accel": ', num(inp$Accel[i]),
     ', "isi": ', num(out$ISI[i]),
     ', "be": ', num(out$BE[i]),
     ', "sf": ', num(out$SF[i]),
@@ -483,6 +577,39 @@ case_json <- function(i) {
     # Go side restricts to cfl in (0, 2] for anything that reads CFL.
     ', "cfc": ', num(out$CFC[i]),
     ', "tfc": ', num(out$TFC[i]),
+    # HFI is eq. 69, fire_intensity(TFC, ROS) = 300 * TFC * ROS, in kW/m. Like
+    # cfc and tfc it was always in fbp()'s contract and simply not emitted until
+    # intensity.go needed it. ROS here is fbp()'s reported head rate -- the
+    # crown-blended rate for C6, the surface rate RSS for every other fuel.
+    ', "hfi": ', num(out$HFI[i]),
+    # The acceleration model's outputs. With accel = 0 fbp() passes the
+    # equilibrium values through (and DH = ROS*HR); only accel = 1 rows exercise
+    # eqs. 70, 71 and 81. DF is computed inline in fbp() -- (DH + DB) / (2*LBt) --
+    # and belongs to the driver row, not to the three files this block ports.
+    ', "hrost": ', num(out$HROSt[i]),
+    ', "brost": ', num(out$BROSt[i]),
+    ', "frost": ', num(out$FROSt[i]),
+    ', "lbt": ', num(out$LBt[i]),
+    ', "dh": ', num(out$DH[i]),
+    ', "db": ', num(out$DB[i]),
+    ', "df": ', num(out$DF[i]),
+    # What fbp()'s driver computes INLINE rather than in a function of its own:
+    # the head azimuth RAZ (degrees, towards), the flank and back crown fractions
+    # and the consumptions and intensities built on them, and the three times to
+    # crown-fire initiation. These are what predict.go adds over the composition
+    # of the ported functions, so they are the driver's own assertions. The theta
+    # outputs (TROS, TROSt, TCFB, TFI, TTFC, TTI) are deliberately not emitted --
+    # see MIGRATION.md's rate_of_spread_at_theta.r row.
+    ', "raz": ', num(out$RAZ[i]),
+    ', "fcfb": ', num(out$FCFB[i]),
+    ', "bcfb": ', num(out$BCFB[i]),
+    ', "ftfc": ', num(out$FTFC[i]),
+    ', "btfc": ', num(out$BTFC[i]),
+    ', "ffi": ', num(out$FFI[i]),
+    ', "bfi": ', num(out$BFI[i]),
+    ', "ti": ', num(out$TI[i]),
+    ', "fti": ', num(out$FTI[i]),
+    ', "bti": ', num(out$BTI[i]),
     ', "fd": ', q(as.character(out$FD[i])),
     ', "ros": ', num(out$ROS[i]),
     ', "lb": ', num(out$LB[i]),
@@ -503,7 +630,7 @@ body <- paste(vapply(seq_len(nrow(inp)), case_json, character(1)), collapse = ",
 #     before this block existed, so tools/fixture-diff over the FBP section can
 #     say "no column moved" and mean it.
 #   - No row down here carries a "fuel" key. precheck counts FBP cases by that
-#     substring, and the documented 24,260 is an FBP number.
+#     substring, and the documented 25,097 is an FBP number.
 #   - The two systems share no input: FBP takes FFMC/BUI as given, and this is
 #     where they come from.
 #

@@ -35,8 +35,8 @@ import "math"
 // this package refuses to make. cffdrs' fbp() does substitute 0.35; that is a
 // driver's decision, and this package does not have a driver.
 //
-// It does not compute fireline intensity. HFI is eq. 69 and is not ported yet —
-// see MIGRATION.md. Total and crown fuel consumption — eqs. 66a/66b/66c and 67 —
+// It does not compute fireline intensity: that is FireIntensity, eq. 69, in
+// intensity.go. Total and crown fuel consumption — eqs. 66a/66b/66c and 67 —
 // are at the bottom of this file.
 
 // The SFC coefficients, by equation number.
@@ -295,8 +295,9 @@ func SurfaceFuelConsumption(code string, ffmc, bui, pc, gfl float64) float64 {
 // reaches only M1 and M2, PDF only M3 and M4; every other fuel is the bare
 // product and ignores both.
 //
-// CFL is the caller's, as it is in Crown. This package has no per-fuel crown
-// fuel load table and does not substitute one — see MIGRATION.md. Passing the
+// CFL is the caller's, as it is in Crown. The published per-fuel table is
+// DefaultCrownFuelLoad (crowndefaults.go), and nothing here substitutes it on
+// the caller's behalf. Passing the
 // published 0 for a fuel with no crown gives 0 here, which is the right answer
 // by the arithmetic rather than by a gate.
 //

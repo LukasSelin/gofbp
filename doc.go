@@ -130,15 +130,22 @@
 // Crown.FMC stay fields the caller fills, because computing them needs a grass
 // fuel load and a location and date that only the caller has.
 //
-// Not implemented, and caller-supplied instead: the published per-fuel CBH and CFL
-// default tables. That is the one with teeth — without those tables a caller
-// has no source for crown base height or crown fuel load inside this package and
-// must bring its own, and CFL in particular is what keeps the fuels with no crown
-// (D1, S1-S3, O1A, O1B) reporting zero.
+// The published per-fuel CBH and CFL tables are a lookup the caller opts into —
+// DefaultCrownBaseHeight, DefaultCrownFuelLoad, and CrownBaseHeight /
+// CrownFuelLoad for fbp()'s substitution rules (crowndefaults.go) — and Crown
+// calls none of them, for the same reason it calls neither of the above: a
+// measured stand must not be quietly replaced by a published average. CFL is the
+// one with teeth: it is what keeps the fuels with no crown (D1, S1-S3, O1A,
+// O1B) reporting zero, so the caller who fills Crown.CFL owns that.
 //
-// Also not implemented: the consumption and intensity outputs CFC, TFC and HFI,
-// which depend on CFB but are a separate quantity from spread; and C6's SLOPED
-// path. The second is narrower than it sounds and is worth stating, because C6's
+// Predict (predict.go) composes all of it the way cffdrs' fbp() does, for one
+// stand, and applies none of the above lookups unless the Input names them.
+//
+// The consumption and intensity outputs CFC, TFC and HFI are implemented
+// (consumption.go, intensity.go) as functions of CFB rather than as part of the
+// threshold, since they are a separate quantity from spread. What is not
+// implemented is C6's SLOPED path. It is narrower than it sounds and is worth
+// stating, because C6's
 // crown rate of spread landing does not close it. cffdrs back-solves the
 // slope-equivalent wind from rate_of_spread(), which for C6 returns the BLENDED
 // rate — so its equivalent wind for a sloped C6 stand depends on FMC and CBH,

@@ -25,21 +25,25 @@ func TestLoadTheRealLedger(t *testing.T) {
 	if len(l.Log) < 1 {
 		t.Errorf("%d log entries", len(l.Log))
 	}
-	if len(l.DependencyOrder) < 5 {
-		t.Errorf("dependency order: %v", l.DependencyOrder)
+	// Empty since 2026-10-21, when the last row with work in it went 🟢; the
+	// ledger says so with NothingOwed, which is what lets it parse.
+	if len(l.DependencyOrder) != 0 {
+		t.Errorf("dependency order: %v, want empty", l.DependencyOrder)
 	}
 
 	byKey := l.ByKey()
 	// A row that owns several upstream files must be reachable by each of them,
 	// and the index must carry the row's real status rather than the first one it
-	// saw. Two rows exercise that: FMC, which owns two files and is ported, and
-	// the acceleration model, which owns three and is still owed.
+	// saw. Two rows exercise that: FMC, which owns two files, and the
+	// acceleration model, which owns three. Both are ported — the acceleration
+	// model was the last 🔴 row, until 2026-10-21 — so what this checks now is
+	// that every file of a multi-file row reaches the same row.
 	for _, tc := range []struct {
 		files  []string
 		status string
 	}{
 		{[]string{"foliar_moisture_content.r", "foliar_moisture_content_minimum.r"}, Ported},
-		{[]string{"rate_of_spread_at_time.r", "distance_at_time.r", "length_to_breadth_at_time.r"}, Missing},
+		{[]string{"rate_of_spread_at_time.r", "distance_at_time.r", "length_to_breadth_at_time.r"}, Ported},
 	} {
 		for _, f := range tc.files {
 			r, ok := byKey[f]
@@ -90,12 +94,16 @@ func TestDependencyOrderKeepsItsOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	// This tracks the ledger's current top row, so it moves with every port —
-	// SFC held it until 2026-09-18, then FMC for the rest of that day. Updating
+	// SFC held it until 2026-09-18, then FMC for the rest of that day, then the
+	// CBH/CFL tables, the acceleration model and the driver, all ported on
+	// 2026-10-21.
+	// Updating
 	// it IS the check: a parser that deduplicated or reordered the list would
 	// land on something else.
-	if got := l.DependencyOrder[0]; got != "crown_base_height.r" {
-		t.Errorf("first item = %q, want crown_base_height.r — the CBH/CFL tables are the "+
-			"top unblocked row", got)
+	// Since 2026-10-21 there is no top row: the list is empty and says so. A
+	// row going back to 🔴 must reappear here, and this is the line to update.
+	if len(l.DependencyOrder) != 0 {
+		t.Errorf("first item = %q, want an empty list", l.DependencyOrder[0])
 	}
 	seen := map[string]bool{}
 	for _, f := range l.DependencyOrder {
@@ -179,6 +187,18 @@ func TestADependencyOrderWithNoFilenamesIsAnError(t *testing.T) {
 	}
 	if _, err := Load(path); err == nil {
 		t.Error("a dependency order naming no files parsed cleanly")
+	}
+
+	// The same empty list, saying in words that it is empty, is fine.
+	said := head + dependencyHeading + "\n\n" + NothingOwed + "\n\n## " + after
+	if err := os.WriteFile(path, []byte(said), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	l, err := Load(path)
+	if err != nil {
+		t.Errorf("an empty dependency order that says %q did not parse: %v", NothingOwed, err)
+	} else if len(l.DependencyOrder) != 0 {
+		t.Errorf("dependency order = %v, want empty", l.DependencyOrder)
 	}
 }
 

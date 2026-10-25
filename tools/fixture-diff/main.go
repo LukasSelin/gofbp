@@ -51,9 +51,14 @@ import (
 // against one — which is exactly the case the "present in BOTH fixtures" rule
 // below handles, and why that block gives every one of its sites a distinct
 // latitude.
+//
+// sd and sh joined it with the CBH/CFL defaults block (C6's stand density and
+// height), and hr and accel with the acceleration block. The same rule applies:
+// the stand rows each get a latitude of their own, and the acceleration rows a
+// flat-ground wind direction per hour, for the same reason.
 var inputCols = []string{
 	"fuel", "ffmc", "bui", "ws", "wd", "gs", "pc", "pdf", "cc", "cbh", "cfl",
-	"lat", "long", "elv", "dj", "d0",
+	"lat", "long", "elv", "dj", "d0", "sd", "sh", "hr", "accel",
 }
 
 // fwiInputCols identify a case in the FWI System's section, "fwi_cases" — a
